@@ -176,6 +176,68 @@ func TestGetRepoRoot(t *testing.T) {
 	}
 }
 
+func TestGetFileContent(t *testing.T) {
+	tests := []struct {
+		name    string
+		ref     string
+		path    string
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "file at HEAD",
+			ref:  "HEAD",
+			path: "file.txt",
+			want: "hello\nworld\n",
+		},
+		{
+			name: "file at tag",
+			ref:  "v0",
+			path: "file.txt",
+			want: "hello\n",
+		},
+		{
+			name: "go file at HEAD",
+			ref:  "HEAD",
+			path: "src/app.go",
+			want: "package app\n",
+		},
+		{
+			name:    "nonexistent file returns error",
+			ref:     "HEAD",
+			path:    "nosuchfile.txt",
+			wantErr: true,
+		},
+		{
+			name:    "invalid ref returns error",
+			ref:     "nonexistent_ref_xyz",
+			path:    "file.txt",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := setupTestRepo(t)
+
+			got, err := GetFileContent(tt.ref, tt.path, dir)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if got != tt.want {
+				t.Errorf("GetFileContent = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestGetRepoRoot_NotARepo(t *testing.T) {
 	dir := t.TempDir()
 

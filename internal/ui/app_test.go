@@ -321,6 +321,84 @@ func TestViewEmptyPairs(t *testing.T) {
 	}
 }
 
+func TestSetHighlighting(t *testing.T) {
+	pairs := buildTestPairs()
+	m := newTestModel(pairs, 120, 40)
+
+	if len(m.oldHighlighted) != 0 {
+		t.Error("oldHighlighted should be empty initially")
+	}
+	if len(m.newHighlighted) != 0 {
+		t.Error("newHighlighted should be empty initially")
+	}
+
+	// Set highlighting with Go-like content
+	m.SetHighlighting("test.go", "context line one\ndeleted line\ncontext line three\n", "context line one\nadded line\ncontext line three\n")
+
+	if len(m.oldHighlighted) == 0 {
+		t.Error("oldHighlighted should not be empty after SetHighlighting")
+	}
+	if len(m.newHighlighted) == 0 {
+		t.Error("newHighlighted should not be empty after SetHighlighting")
+	}
+
+	// View should still work (no crashes)
+	output := m.View()
+	if output == "" {
+		t.Error("View() should return non-empty output with highlighting")
+	}
+}
+
+func TestViewWithHighlightingAndWordDiff(t *testing.T) {
+	pairs := buildTestPairs()
+	m := newTestModel(pairs, 120, 40)
+	m.SetHighlighting("test.go", "context line one\ndeleted line\ncontext line three\n", "context line one\nadded line\ncontext line three\n")
+
+	// View without word diff
+	output1 := m.View()
+
+	// Toggle word diff
+	newModel, _ := m.Update(keyMsg("w"))
+	m = newModel.(Model)
+	m.SetHighlighting("test.go", "context line one\ndeleted line\ncontext line three\n", "context line one\nadded line\ncontext line three\n")
+
+	// View with word diff
+	output2 := m.View()
+
+	// Both should produce non-empty output
+	if output1 == "" || output2 == "" {
+		t.Error("View() should return non-empty output")
+	}
+
+	// Content text should still be present
+	if !strings.Contains(output1, "context line one") {
+		t.Error("output should contain line content")
+	}
+}
+
+func TestWordDiffToggle(t *testing.T) {
+	m := newTestModel(buildTestPairs(), 120, 40)
+
+	// Initially wordDiff should be false
+	if m.wordDiff {
+		t.Error("wordDiff should be false initially")
+	}
+
+	// Press 'w' to toggle on
+	newModel, _ := m.Update(keyMsg("w"))
+	m = newModel.(Model)
+	if !m.wordDiff {
+		t.Error("wordDiff should be true after pressing 'w'")
+	}
+
+	// Press 'w' again to toggle off
+	newModel, _ = m.Update(keyMsg("w"))
+	m = newModel.(Model)
+	if m.wordDiff {
+		t.Error("wordDiff should be false after pressing 'w' again")
+	}
+}
+
 // Helper to create a simple key message
 func keyMsg(key string) tea.KeyMsg {
 	return tea.KeyMsg{

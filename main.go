@@ -163,8 +163,54 @@ func main() {
 	// Build paired lines for the first file
 	paired := diff.BuildPairedLines(files[0].Hunks)
 
+	// Determine refs for file content fetch
+	var refOld, refNew string
+	switch args.Mode {
+	case ModeWorkingTree:
+		refOld = "HEAD"
+		refNew = "" // working tree — read from disk
+	case ModeSingleRef:
+		refOld = args.RefFrom
+		refNew = "HEAD"
+	case ModeRefRange:
+		refOld = args.RefFrom
+		refNew = args.RefTo
+	}
+
 	// Launch TUI
 	m := ui.NewModel(files, paired, 0, 0)
+
+	// Lazy-fetch and highlight the first file
+	f := files[0]
+	if !f.IsBinary {
+		filename := f.NewName
+		if filename == "" {
+			filename = f.OldName
+		}
+
+		var oldContent, newContent string
+
+		// Fetch old side content
+		if !f.IsNew {
+			oldContent, _ = diff.GetFileContent(refOld, f.OldName, cwd)
+		}
+
+		// Fetch new side content
+		if !f.IsDeleted {
+			if refNew == "" {
+				// Working tree — read from disk
+				data, err := os.ReadFile(f.NewName)
+				if err == nil {
+					newContent = string(data)
+				}
+			} else {
+				newContent, _ = diff.GetFileContent(refNew, f.NewName, cwd)
+			}
+		}
+
+		m.SetHighlighting(filename, oldContent, newContent)
+	}
+
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

@@ -46,6 +46,21 @@ func GetDiff(args DiffArgs, dir string) (string, error) {
 	return string(stdout), nil
 }
 
+// GetFileContent retrieves file content from a git ref using git show.
+// Returns the file content as a string. Returns an error if the ref or path
+// does not exist.
+func GetFileContent(ref, path, dir string) (string, error) {
+	cmd := exec.Command("git", "-C", dir, "show", ref+":"+path)
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return "", fmt.Errorf("git show %s:%s failed: %s: %w", ref, path, strings.TrimSpace(string(exitErr.Stderr)), err)
+		}
+		return "", fmt.Errorf("git show %s:%s failed: %w", ref, path, err)
+	}
+	return string(out), nil
+}
+
 // GetRepoRoot returns the absolute path to the git repository root.
 func GetRepoRoot(dir string) (string, error) {
 	cmd := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel")

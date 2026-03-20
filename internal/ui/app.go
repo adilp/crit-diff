@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/adil/cr/internal/diff"
+	"github.com/adil/cr/internal/render"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -34,19 +35,25 @@ const (
 	colorPaddingBg      = "233" // subtle background for blank padding rows
 	colorPaddingFg      = "239" // foreground for padding rows
 	colorSeparator      = "240" // foreground for hunk separator lines
+	colorEmphasisAdd    = "22"  // dark green background for word-level add emphasis
+	colorEmphasisDelete = "52"  // dark red background for word-level delete emphasis
 )
 
 // Model is the Bubble Tea model for the cr TUI.
 type Model struct {
-	mode       InputMode
-	files      []diff.DiffFile
-	activeFile int
-	activeSide Side
-	cursorRow  int
-	paired     []diff.PairedLine
-	width      int
-	height     int
-	yOffset    int
+	mode           InputMode
+	files          []diff.DiffFile
+	activeFile     int
+	activeSide     Side
+	cursorRow      int
+	paired         []diff.PairedLine
+	width          int
+	height         int
+	yOffset        int
+	wordDiff       bool
+	renderer       *render.Renderer
+	oldHighlighted []render.HighlightedLine // highlighted lines for old side of active file
+	newHighlighted []render.HighlightedLine // highlighted lines for new side of active file
 }
 
 // NewModel creates a new TUI model with the given diff data and terminal dimensions.
@@ -58,7 +65,16 @@ func NewModel(files []diff.DiffFile, paired []diff.PairedLine, width, height int
 		paired:     paired,
 		width:      width,
 		height:     height,
+		renderer:   render.NewRenderer(),
 	}
+}
+
+// SetHighlighting sets the highlighted lines for the current active file.
+// oldContent and newContent are the full file contents for old and new sides.
+// The filename is used for language detection.
+func (m *Model) SetHighlighting(filename, oldContent, newContent string) {
+	m.oldHighlighted = m.renderer.HighlightFileWithKey("old:"+filename, filename, oldContent)
+	m.newHighlighted = m.renderer.HighlightFileWithKey("new:"+filename, filename, newContent)
 }
 
 // Init implements tea.Model.
@@ -126,6 +142,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "l":
 			m.activeSide = SideNew
 			return m, nil
+		case "w":
+			m.wordDiff = !m.wordDiff
+			return m, nil
 		}
 	}
 	return m, nil
@@ -181,8 +200,11 @@ func (m Model) View() string {
 			continue
 		}
 
-		leftStr := m.renderPane(p.Left, SideOld, paneWidth, lineNumWidth, isCursor, m.activeSide == SideOld)
-		rightStr := m.renderPane(p.Right, SideNew, paneWidth, lineNumWidth, isCursor, m.activeSide == SideNew)
+		// Prepare highlighted content for each side
+		leftHL, rightHL := m.highlightPair(p)
+
+		leftStr := m.renderPane(p.Left, SideOld, paneWidth, lineNumWidth, isCursor, m.activeSide == SideOld, leftHL)
+		rightStr := m.renderPane(p.Right, SideNew, paneWidth, lineNumWidth, isCursor, m.activeSide == SideNew, rightHL)
 		row := lipgloss.JoinHorizontal(lipgloss.Top, leftStr, "│", rightStr)
 		rows = append(rows, row)
 	}
@@ -195,8 +217,44 @@ func (m Model) View() string {
 	return strings.Join(rows, "\n") + "\n" + statusBar + "\n" + helpBar
 }
 
+// highlightPair returns rendered highlighted content for both sides of a paired line.
+// Returns empty strings if highlighting is not available.
+func (m Model) highlightPair(p diff.PairedLine) (string, string) {
+	var leftHL, rightHL string
+
+	// Look up highlighted lines by line number (1-based → 0-indexed)
+	if p.Left != nil && len(m.oldHighlighted) > 0 {
+		idx := p.Left.OldNum - 1
+		if idx >= 0 && idx < len(m.oldHighlighted) {
+			hl := m.oldHighlighted[idx]
+			// Apply word-level emphasis if enabled and this is a delete paired with an add
+			if m.wordDiff && p.Left.Type == diff.LineDelete && p.Right != nil && p.Right.Type == diff.LineAdd {
+				oldMask, _ := render.ComputeWordDiff(p.Left.Content, p.Right.Content)
+				hl = render.ApplyEmphasis(hl, oldMask, colorEmphasisDelete)
+			}
+			leftHL = render.RenderLine(hl)
+		}
+	}
+
+	if p.Right != nil && len(m.newHighlighted) > 0 {
+		idx := p.Right.NewNum - 1
+		if idx >= 0 && idx < len(m.newHighlighted) {
+			hl := m.newHighlighted[idx]
+			// Apply word-level emphasis if enabled and this is an add paired with a delete
+			if m.wordDiff && p.Right.Type == diff.LineAdd && p.Left != nil && p.Left.Type == diff.LineDelete {
+				_, newMask := render.ComputeWordDiff(p.Left.Content, p.Right.Content)
+				hl = render.ApplyEmphasis(hl, newMask, colorEmphasisAdd)
+			}
+			rightHL = render.RenderLine(hl)
+		}
+	}
+
+	return leftHL, rightHL
+}
+
 // renderPane renders one side of a paired line.
-func (m Model) renderPane(line *diff.DiffLine, side Side, paneWidth, lineNumWidth int, isCursor, isActiveSide bool) string {
+// highlightedContent, if non-empty, is used instead of raw line content (contains ANSI styling).
+func (m Model) renderPane(line *diff.DiffLine, side Side, paneWidth, lineNumWidth int, isCursor, isActiveSide bool, highlightedContent string) string {
 	if line == nil {
 		return m.renderBlankPadding(paneWidth, isCursor, isActiveSide)
 	}
@@ -216,17 +274,23 @@ func (m Model) renderPane(line *diff.DiffLine, side Side, paneWidth, lineNumWidt
 		}
 	}
 
-	content := line.Content
 	contentWidth := paneWidth - lineNumWidth
 	if contentWidth < 0 {
 		contentWidth = 0
+	}
+
+	// Use highlighted content if available, otherwise use raw content
+	content := highlightedContent
+	useHighlighted := content != ""
+	if !useHighlighted {
+		content = line.Content
 	}
 
 	// Clip content at pane width using display-width-aware truncation
 	displayWidth := ansi.StringWidth(content)
 	if displayWidth > contentWidth {
 		content = ansi.Truncate(content, contentWidth, "")
-		displayWidth = contentWidth
+		displayWidth = ansi.StringWidth(content)
 	}
 
 	// Pad content to fill pane width
@@ -236,13 +300,16 @@ func (m Model) renderPane(line *diff.DiffLine, side Side, paneWidth, lineNumWidt
 
 	lineStr := numStr + "│" + content
 
-	// Apply styling
+	// Apply styling — skip foreground color when using highlighted content
+	// (syntax colors are already embedded in the ANSI content)
 	style := lipgloss.NewStyle()
-	switch line.Type {
-	case diff.LineAdd:
-		style = style.Foreground(lipgloss.Color(colorAdd))
-	case diff.LineDelete:
-		style = style.Foreground(lipgloss.Color(colorDelete))
+	if !useHighlighted {
+		switch line.Type {
+		case diff.LineAdd:
+			style = style.Foreground(lipgloss.Color(colorAdd))
+		case diff.LineDelete:
+			style = style.Foreground(lipgloss.Color(colorDelete))
+		}
 	}
 
 	if isCursor {
