@@ -399,6 +399,233 @@ func TestWordDiffToggle(t *testing.T) {
 	}
 }
 
+// buildMultiFilePairs creates paired lines for two files (used for ]f/[f tests).
+func buildMultiFilePairs() ([]diff.DiffFile, [][]diff.PairedLine) {
+	files := []diff.DiffFile{
+		{OldName: "file1.go", NewName: "file1.go",
+			Hunks: []diff.Hunk{{
+				OldStart: 1, OldCount: 2, NewStart: 1, NewCount: 2,
+				Lines: []diff.DiffLine{
+					{Type: diff.LineContext, OldNum: 1, NewNum: 1, Content: "file1 line1"},
+					{Type: diff.LineAdd, NewNum: 2, Content: "file1 added"},
+				},
+			}},
+		},
+		{OldName: "file2.go", NewName: "file2.go",
+			Hunks: []diff.Hunk{{
+				OldStart: 1, OldCount: 2, NewStart: 1, NewCount: 2,
+				Lines: []diff.DiffLine{
+					{Type: diff.LineContext, OldNum: 1, NewNum: 1, Content: "file2 line1"},
+					{Type: diff.LineDelete, OldNum: 2, Content: "file2 deleted"},
+				},
+			}},
+		},
+	}
+	allPaired := make([][]diff.PairedLine, len(files))
+	for i, f := range files {
+		allPaired[i] = diff.BuildPairedLines(f.Hunks)
+	}
+	return files, allPaired
+}
+
+func newMultiFileTestModel(width, height int) Model {
+	files, allPaired := buildMultiFilePairs()
+	m := NewModel(files, allPaired[0], width, height)
+	m.allPaired = allPaired
+	return m
+}
+
+func TestKeySequenceNavigation(t *testing.T) {
+	tests := []struct {
+		name            string
+		setupModel      func() Model
+		keys            []tea.KeyMsg
+		wantCursorRow   int
+		checkActiveFile bool
+		wantActiveFile  int
+		wantPendingKey  string
+	}{
+		{
+			name: "gg moves to top",
+			setupModel: func() Model {
+				m := newTestModel(buildTallPairs(), 120, 40)
+				// Move cursor down first
+				for i := 0; i < 15; i++ {
+					newM, _ := m.Update(keyMsg("j"))
+					m = newM.(Model)
+				}
+				return m
+			},
+			keys:          []tea.KeyMsg{keyMsg("g"), keyMsg("g")},
+			wantCursorRow: 0,
+		},
+		{
+			name: "G moves to bottom",
+			setupModel: func() Model {
+				return newTestModel(buildTallPairs(), 120, 40)
+			},
+			keys:          []tea.KeyMsg{keyMsg("G")},
+			wantCursorRow: 29, // buildTallPairs creates 30 lines (0-indexed)
+		},
+		{
+			name: "]c jumps to next hunk",
+			setupModel: func() Model {
+				return newTestModel(buildMultiHunkPairs(), 120, 40)
+			},
+			keys:          []tea.KeyMsg{keyMsg("]"), keyMsg("c")},
+			wantCursorRow: 3, // separator at index 2, first line of hunk 2 at index 3
+		},
+		{
+			name: "[c jumps to prev hunk",
+			setupModel: func() Model {
+				m := newTestModel(buildMultiHunkPairs(), 120, 40)
+				m.cursorRow = 4 // in hunk 2
+				return m
+			},
+			keys:          []tea.KeyMsg{keyMsg("["), keyMsg("c")},
+			wantCursorRow: 0, // first line of hunk 1
+		},
+		{
+			name: "]c at last hunk does nothing",
+			setupModel: func() Model {
+				m := newTestModel(buildMultiHunkPairs(), 120, 40)
+				m.cursorRow = 4 // in last hunk
+				return m
+			},
+			keys:          []tea.KeyMsg{keyMsg("]"), keyMsg("c")},
+			wantCursorRow: 4,
+		},
+		{
+			name: "[c at first hunk does nothing",
+			setupModel: func() Model {
+				return newTestModel(buildMultiHunkPairs(), 120, 40)
+			},
+			keys:          []tea.KeyMsg{keyMsg("["), keyMsg("c")},
+			wantCursorRow: 0,
+		},
+		{
+			name: "]f switches to next file",
+			setupModel: func() Model {
+				return newMultiFileTestModel(120, 40)
+			},
+			keys:            []tea.KeyMsg{keyMsg("]"), keyMsg("f")},
+			checkActiveFile: true,
+			wantActiveFile:  1,
+			wantCursorRow:   0,
+		},
+		{
+			name: "[f switches to prev file",
+			setupModel: func() Model {
+				m := newMultiFileTestModel(120, 40)
+				// Move to file 2 first
+				newM, _ := m.Update(keyMsg("]"))
+				m = newM.(Model)
+				newM, _ = m.Update(keyMsg("f"))
+				m = newM.(Model)
+				return m
+			},
+			keys:            []tea.KeyMsg{keyMsg("["), keyMsg("f")},
+			checkActiveFile: true,
+			wantActiveFile:  0,
+			wantCursorRow:   0,
+		},
+		{
+			name: "]f at last file does nothing",
+			setupModel: func() Model {
+				m := newMultiFileTestModel(120, 40)
+				// Move to last file
+				newM, _ := m.Update(keyMsg("]"))
+				m = newM.(Model)
+				newM, _ = m.Update(keyMsg("f"))
+				m = newM.(Model)
+				return m
+			},
+			keys:            []tea.KeyMsg{keyMsg("]"), keyMsg("f")},
+			checkActiveFile: true,
+			wantActiveFile:  1,
+		},
+		{
+			name: "[f at first file does nothing",
+			setupModel: func() Model {
+				return newMultiFileTestModel(120, 40)
+			},
+			keys:            []tea.KeyMsg{keyMsg("["), keyMsg("f")},
+			checkActiveFile: true,
+			wantActiveFile:  0,
+		},
+		{
+			name: "g then x discards both keys",
+			setupModel: func() Model {
+				return newTestModel(buildTestPairs(), 120, 40)
+			},
+			keys:          []tea.KeyMsg{keyMsg("g"), keyMsg("x")},
+			wantCursorRow: 0,
+		},
+		{
+			name: "] then x discards both keys",
+			setupModel: func() Model {
+				return newTestModel(buildTestPairs(), 120, 40)
+			},
+			keys:          []tea.KeyMsg{keyMsg("]"), keyMsg("x")},
+			wantCursorRow: 0,
+		},
+		{
+			name: "[ then x discards both keys",
+			setupModel: func() Model {
+				return newTestModel(buildTestPairs(), 120, 40)
+			},
+			keys:          []tea.KeyMsg{keyMsg("["), keyMsg("x")},
+			wantCursorRow: 0,
+		},
+		{
+			name: "d then x discards both keys",
+			setupModel: func() Model {
+				return newTestModel(buildTestPairs(), 120, 40)
+			},
+			keys:          []tea.KeyMsg{keyMsg("d"), keyMsg("x")},
+			wantCursorRow: 0,
+		},
+		{
+			name: "g sets pending key",
+			setupModel: func() Model {
+				return newTestModel(buildTestPairs(), 120, 40)
+			},
+			keys:           []tea.KeyMsg{keyMsg("g")},
+			wantPendingKey: "g",
+		},
+		{
+			name: "] sets pending key",
+			setupModel: func() Model {
+				return newTestModel(buildTestPairs(), 120, 40)
+			},
+			keys:           []tea.KeyMsg{keyMsg("]")},
+			wantPendingKey: "]",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := tt.setupModel()
+			for _, key := range tt.keys {
+				newModel, _ := m.Update(key)
+				m = newModel.(Model)
+			}
+
+			if m.cursorRow != tt.wantCursorRow {
+				t.Errorf("cursorRow: got %d, want %d", m.cursorRow, tt.wantCursorRow)
+			}
+			if tt.checkActiveFile {
+				if m.activeFile != tt.wantActiveFile {
+					t.Errorf("activeFile: got %d, want %d", m.activeFile, tt.wantActiveFile)
+				}
+			}
+			if m.pendingKey != tt.wantPendingKey {
+				t.Errorf("pendingKey: got %q, want %q", m.pendingKey, tt.wantPendingKey)
+			}
+		})
+	}
+}
+
 // Helper to create a simple key message
 func keyMsg(key string) tea.KeyMsg {
 	return tea.KeyMsg{

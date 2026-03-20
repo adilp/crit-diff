@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/adil/cr/internal/config"
 	"github.com/adil/cr/internal/diff"
+	"github.com/adil/cr/internal/keys"
 	"github.com/adil/cr/internal/render"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -47,10 +49,13 @@ type Model struct {
 	activeSide     Side
 	cursorRow      int
 	paired         []diff.PairedLine
+	allPaired      [][]diff.PairedLine // paired lines for each file
 	width          int
 	height         int
 	yOffset        int
 	wordDiff       bool
+	pendingKey     string
+	config         config.Config
 	renderer       *render.Renderer
 	oldHighlighted []render.HighlightedLine // highlighted lines for old side of active file
 	newHighlighted []render.HighlightedLine // highlighted lines for new side of active file
@@ -58,6 +63,7 @@ type Model struct {
 
 // NewModel creates a new TUI model with the given diff data and terminal dimensions.
 func NewModel(files []diff.DiffFile, paired []diff.PairedLine, width, height int) Model {
+	cfg, _ := config.Load("")
 	return Model{
 		mode:       InputModeNormal,
 		files:      files,
@@ -65,6 +71,7 @@ func NewModel(files []diff.DiffFile, paired []diff.PairedLine, width, height int
 		paired:     paired,
 		width:      width,
 		height:     height,
+		config:     cfg,
 		renderer:   render.NewRenderer(),
 	}
 }
@@ -107,47 +114,170 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyCtrlC:
+	if msg.Type == tea.KeyCtrlC {
 		return m, tea.Quit
+	}
+
+	// Convert tea.KeyMsg to a string for the keys package
+	keyStr := teaKeyToString(msg)
+
+	// If we have a pending key, resolve the two-key sequence
+	if m.pendingKey != "" {
+		action := keys.Resolve(m.config, keyStr, m.pendingKey)
+		m.pendingKey = ""
+		return m.handleAction(action)
+	}
+
+	// Check if this key is a prefix (starts a sequence)
+	if keys.IsPrefix(m.config, keyStr) {
+		m.pendingKey = keyStr
+		return m, nil
+	}
+
+	// Single-key action
+	action := keys.Resolve(m.config, keyStr, "")
+	return m.handleAction(action)
+}
+
+// teaKeyToString converts a Bubble Tea key message to a string for keys.Resolve.
+func teaKeyToString(msg tea.KeyMsg) string {
+	switch msg.Type {
 	case tea.KeyCtrlD:
+		return "Ctrl-d"
+	case tea.KeyCtrlU:
+		return "Ctrl-u"
+	case tea.KeyTab:
+		return "Tab"
+	case tea.KeyEsc:
+		return "Esc"
+	case tea.KeySpace:
+		return "Space"
+	case tea.KeyRunes:
+		return string(msg.Runes)
+	default:
+		return msg.String()
+	}
+}
+
+func (m Model) handleAction(action keys.Action) (tea.Model, tea.Cmd) {
+	switch action {
+	case keys.ActionQuit:
+		return m, tea.Quit
+	case keys.ActionScrollDown:
+		if m.cursorRow < len(m.paired)-1 {
+			m.cursorRow++
+		}
+		m.scrollToCursor()
+	case keys.ActionScrollUp:
+		if m.cursorRow > 0 {
+			m.cursorRow--
+		}
+		m.scrollToCursor()
+	case keys.ActionPaneLeft:
+		m.activeSide = SideOld
+	case keys.ActionPaneRight:
+		m.activeSide = SideNew
+	case keys.ActionHalfPageDown:
 		m.cursorRow += m.visibleRows() / 2
 		m.clampCursor()
 		m.scrollToCursor()
-		return m, nil
-	case tea.KeyCtrlU:
+	case keys.ActionHalfPageUp:
 		m.cursorRow -= m.visibleRows() / 2
 		m.clampCursor()
 		m.scrollToCursor()
-		return m, nil
-	case tea.KeyRunes:
-		switch string(msg.Runes) {
-		case "q":
-			return m, tea.Quit
-		case "j":
-			if m.cursorRow < len(m.paired)-1 {
-				m.cursorRow++
-			}
-			m.scrollToCursor()
-			return m, nil
-		case "k":
-			if m.cursorRow > 0 {
-				m.cursorRow--
-			}
-			m.scrollToCursor()
-			return m, nil
-		case "h":
-			m.activeSide = SideOld
-			return m, nil
-		case "l":
-			m.activeSide = SideNew
-			return m, nil
-		case "w":
-			m.wordDiff = !m.wordDiff
-			return m, nil
+	case keys.ActionToggleWordDiff:
+		m.wordDiff = !m.wordDiff
+	case keys.ActionTop:
+		m.cursorRow = 0
+		m.scrollToCursor()
+	case keys.ActionBottom:
+		m.cursorRow = len(m.paired) - 1
+		if m.cursorRow < 0 {
+			m.cursorRow = 0
 		}
+		m.scrollToCursor()
+	case keys.ActionNextHunk:
+		m.jumpToNextHunk()
+	case keys.ActionPrevHunk:
+		m.jumpToPrevHunk()
+	case keys.ActionNextFile:
+		m.switchToNextFile()
+	case keys.ActionPrevFile:
+		m.switchToPrevFile()
+	// Recognized but no-op until later tickets
+	case keys.ActionNextComment, keys.ActionPrevComment:
+	case keys.ActionExpandBelow, keys.ActionExpandAbove:
+	case keys.ActionCommentAdd, keys.ActionCommentEdit, keys.ActionCommentDelete:
+	case keys.ActionVisualSelect:
+	case keys.ActionToggleTree:
+	case keys.ActionFuzzyFiles, keys.ActionSearchDiffs:
+	case keys.ActionSearch, keys.ActionHelp:
+	case keys.ActionToggleWrap:
+	case keys.ActionDiscard, keys.ActionNone:
 	}
 	return m, nil
+}
+
+// jumpToNextHunk finds the next separator row after cursor and positions on the line after it.
+func (m *Model) jumpToNextHunk() {
+	for i := m.cursorRow + 1; i < len(m.paired); i++ {
+		if m.paired[i].IsSeparator && i+1 < len(m.paired) {
+			m.cursorRow = i + 1
+			m.scrollToCursor()
+			return
+		}
+	}
+}
+
+// jumpToPrevHunk finds the previous separator row before cursor and positions on the first line of that hunk.
+func (m *Model) jumpToPrevHunk() {
+	// Find the separator before the current position
+	for i := m.cursorRow - 1; i >= 0; i-- {
+		if m.paired[i].IsSeparator {
+			// Find the start of the hunk before this separator
+			// The hunk starts at the beginning or after a previous separator
+			start := 0
+			for j := i - 1; j >= 0; j-- {
+				if m.paired[j].IsSeparator {
+					start = j + 1
+					break
+				}
+			}
+			m.cursorRow = start
+			m.scrollToCursor()
+			return
+		}
+	}
+}
+
+// switchToNextFile switches to the next file in the file list.
+func (m *Model) switchToNextFile() {
+	if m.activeFile >= len(m.files)-1 {
+		return
+	}
+	m.activeFile++
+	m.cursorRow = 0
+	m.yOffset = 0
+	if m.allPaired != nil && m.activeFile < len(m.allPaired) {
+		m.paired = m.allPaired[m.activeFile]
+	} else {
+		m.paired = diff.BuildPairedLines(m.files[m.activeFile].Hunks)
+	}
+}
+
+// switchToPrevFile switches to the previous file in the file list.
+func (m *Model) switchToPrevFile() {
+	if m.activeFile <= 0 {
+		return
+	}
+	m.activeFile--
+	m.cursorRow = 0
+	m.yOffset = 0
+	if m.allPaired != nil && m.activeFile < len(m.allPaired) {
+		m.paired = m.allPaired[m.activeFile]
+	} else {
+		m.paired = diff.BuildPairedLines(m.files[m.activeFile].Hunks)
+	}
 }
 
 // clampCursor ensures cursor stays within valid range.
