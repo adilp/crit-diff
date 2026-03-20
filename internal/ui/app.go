@@ -39,6 +39,9 @@ const (
 	colorSeparator      = "240" // foreground for hunk separator lines
 	colorEmphasisAdd    = "22"  // dark green background for word-level add emphasis
 	colorEmphasisDelete = "52"  // dark red background for word-level delete emphasis
+	colorBarBg          = "236" // dark gray background for status/help bars
+	colorBarFg          = "252" // light foreground for bar text
+	colorBarDim         = "245" // dimmer foreground for help bar action labels
 )
 
 // Model is the Bubble Tea model for the cr TUI.
@@ -55,6 +58,7 @@ type Model struct {
 	yOffset        int
 	wordDiff       bool
 	pendingKey     string
+	ref            string // CLI ref arg; empty means working tree
 	config         config.Config
 	renderer       *render.Renderer
 	oldHighlighted []render.HighlightedLine // highlighted lines for old side of active file
@@ -74,6 +78,12 @@ func NewModel(files []diff.DiffFile, paired []diff.PairedLine, width, height int
 		config:     cfg,
 		renderer:   render.NewRenderer(),
 	}
+}
+
+// SetRef sets the ref display string for the status bar.
+// Pass the CLI ref arg (e.g., "main..HEAD"); empty string means working tree.
+func (m *Model) SetRef(ref string) {
+	m.ref = ref
 }
 
 // SetHighlighting sets the highlighted lines for the current active file.
@@ -339,12 +349,21 @@ func (m Model) View() string {
 		rows = append(rows, row)
 	}
 
-	// Reserve status bar line (placeholder — actual bar in CR-009)
-	statusBar := m.renderStatusPlaceholder()
-	// Reserve help bar line (placeholder — actual bar in CR-009)
-	helpBar := ""
+	// Count insertions/deletions for the active file
+	adds, dels := m.countFileChanges()
 
-	return strings.Join(rows, "\n") + "\n" + statusBar + "\n" + helpBar
+	// Status bar (top) and help bar (bottom)
+	filePath := ""
+	if len(m.files) > 0 && m.activeFile < len(m.files) {
+		filePath = m.files[m.activeFile].NewName
+		if filePath == "" {
+			filePath = m.files[m.activeFile].OldName
+		}
+	}
+	statusBar := RenderStatusBar(m.width, m.ref, m.activeFile, len(m.files), filePath, adds, dels, 0, m.activeSide)
+	helpBar := RenderHelpBar(m.width, m.mode)
+
+	return statusBar + "\n" + strings.Join(rows, "\n") + "\n" + helpBar
 }
 
 // highlightPair returns rendered highlighted content for both sides of a paired line.
@@ -477,17 +496,21 @@ func (m Model) renderSeparator(paneWidth int) string {
 	return style.Render(sep)
 }
 
-// renderStatusPlaceholder renders a placeholder status bar.
-func (m Model) renderStatusPlaceholder() string {
-	var side string
-	if m.activeSide == SideOld {
-		side = "old"
-	} else {
-		side = "new"
+// countFileChanges counts insertions and deletions in the active file's hunks.
+func (m Model) countFileChanges() (int, int) {
+	if len(m.files) == 0 || m.activeFile >= len(m.files) {
+		return 0, 0
 	}
-	fileName := ""
-	if len(m.files) > 0 && m.activeFile < len(m.files) {
-		fileName = m.files[m.activeFile].NewName
+	var adds, dels int
+	for _, h := range m.files[m.activeFile].Hunks {
+		for _, l := range h.Lines {
+			switch l.Type {
+			case diff.LineAdd:
+				adds++
+			case diff.LineDelete:
+				dels++
+			}
+		}
 	}
-	return fmt.Sprintf(" %s  [%s]  row %d/%d", fileName, side, m.cursorRow+1, len(m.paired))
+	return adds, dels
 }

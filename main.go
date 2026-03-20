@@ -180,6 +180,14 @@ func main() {
 	// Launch TUI
 	m := ui.NewModel(files, paired, 0, 0)
 
+	// Set ref for status bar display
+	switch args.Mode {
+	case ModeRefRange:
+		m.SetRef(args.RefFrom + ".." + args.RefTo)
+	case ModeSingleRef:
+		m.SetRef(args.RefFrom + "..HEAD")
+	}
+
 	// Lazy-fetch and highlight the first file
 	f := files[0]
 	if !f.IsBinary {
