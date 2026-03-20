@@ -1,2 +1,4 @@
 github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk=
 github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
+github.com/bluekeyes/go-gitdiff v0.7.3 h1:SElKwtm/IQPOwKs0vdowW5uAlip+P+jatagmUU8E0r4=
+github.com/bluekeyes/go-gitdiff v0.7.3/go.mod h1:QpfYYO1E0fTVHVZAZKiRjtSGY9823iCdvGXBcEzHGbM=
