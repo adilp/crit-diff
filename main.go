@@ -5,6 +5,10 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/adil/cr/internal/diff"
+	"github.com/adil/cr/internal/ui"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 type Mode string
@@ -121,12 +125,49 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("cr: mode=%s", args.Mode)
-	if args.RefFrom != "" {
-		fmt.Printf(" ref=%s..%s", args.RefFrom, args.RefTo)
+	// Build diff args from parsed CLI args
+	diffArgs := diff.DiffArgs{
+		Paths: args.PathFilters,
 	}
-	if len(args.PathFilters) > 0 {
-		fmt.Printf(" paths=%v", args.PathFilters)
+	switch args.Mode {
+	case ModeRefRange:
+		diffArgs.RefRange = args.RefFrom + ".." + args.RefTo
+	case ModeSingleRef:
+		diffArgs.RefRange = args.RefFrom
 	}
-	fmt.Println()
+
+	// Get raw diff
+	rawDiff, err := diff.GetDiff(diffArgs, cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if rawDiff == "" {
+		fmt.Println("no changes")
+		os.Exit(0)
+	}
+
+	// Parse diff
+	files, err := diff.Parse(rawDiff)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(files) == 0 {
+		fmt.Println("no changes")
+		os.Exit(0)
+	}
+
+	// Build paired lines for the first file
+	paired := diff.BuildPairedLines(files[0].Hunks)
+
+	// Launch TUI
+	m := ui.NewModel(files, paired, 0, 0)
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 }
