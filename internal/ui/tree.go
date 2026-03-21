@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -231,7 +232,8 @@ func TreeWidth(termWidth int) int {
 }
 
 // RenderTree renders the file tree sidebar.
-func RenderTree(ts *TreeState, width, height, activeFile int) string {
+// commentCounts maps file paths to the number of comments on that file (may be nil).
+func RenderTree(ts *TreeState, width, height, activeFile int, commentCounts map[string]int) string {
 	visible := ts.VisibleEntries()
 	if len(visible) == 0 {
 		return ""
@@ -279,6 +281,13 @@ func RenderTree(ts *TreeState, width, height, activeFile int) string {
 			}
 			if e.IsBinary {
 				suffix = " " + dimStyle.Render("[bin]")
+			}
+
+			// Show comment count indicator
+			if commentCounts != nil {
+				if n, ok := commentCounts[e.FullPath]; ok && n > 0 {
+					suffix = " " + dimStyle.Render(fmt.Sprintf("💬 (%d)", n))
+				}
 			}
 
 			line = indent + prefix + fileStyle.Render(e.Path) + suffix

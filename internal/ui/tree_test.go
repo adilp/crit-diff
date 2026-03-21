@@ -366,7 +366,7 @@ func TestRenderTree(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ts := NewTreeState(tt.files)
-			output := RenderTree(&ts, tt.width, tt.height, tt.activeFile)
+			output := RenderTree(&ts, tt.width, tt.height, tt.activeFile, nil)
 			for _, s := range tt.contains {
 				if !strings.Contains(output, s) {
 					t.Errorf("expected output to contain %q, got:\n%s", s, output)
@@ -392,11 +392,29 @@ func TestRenderTreeScrolling(t *testing.T) {
 		ts.CursorDown()
 	}
 
-	output := RenderTree(&ts, 20, 5, 0)
+	output := RenderTree(&ts, 20, 5, 0, nil)
 	// The cursor entry should be visible
 	if !strings.Contains(output, files[15].NewName) {
 		t.Errorf("scrolled tree should show cursor entry %q", files[15].NewName)
 	}
+}
+
+func TestRenderTreeCommentIndicator(t *testing.T) {
+	files := []diff.DiffFile{
+		{NewName: "foo.go"},
+		{NewName: "bar.go"},
+	}
+	ts := NewTreeState(files)
+	counts := map[string]int{"foo.go": 2}
+	output := RenderTree(&ts, 40, 10, 0, counts)
+	if !strings.Contains(output, "💬") {
+		t.Error("tree should show 💬 indicator for file with comments")
+	}
+	if !strings.Contains(output, "(2)") {
+		t.Error("tree should show comment count (2)")
+	}
+	// bar.go should NOT have comment indicator
+	// (hard to check per-line, just verify count appears once)
 }
 
 // Integration tests: tree mode in app.go

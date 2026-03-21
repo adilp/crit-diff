@@ -9,11 +9,12 @@ import (
 
 // CommentOverlay holds the state for the comment input modal.
 type CommentOverlay struct {
-	Active   bool
-	Input    textinput.Model
-	Line     int  // file line number being commented
-	Side     Side // old or new
-	RowIndex int  // row in paired lines (for positioning)
+	Active    bool
+	Input     textinput.Model
+	Line      int    // file line number being commented
+	Side      Side   // old or new
+	RowIndex  int    // row in paired lines (for positioning)
+	editingID string // non-empty when editing an existing comment (stores comment ID)
 }
 
 // NewCommentOverlay creates a new active comment overlay for the given line.

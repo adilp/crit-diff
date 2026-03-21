@@ -50,6 +50,8 @@ const (
 	colorTreeFile       = "252" // brighter foreground for files (matches colorBarFg)
 	colorTreeActive     = "2"   // green for active file indicator (matches colorAdd)
 	colorTreeDim        = "240" // dim text for tree indicators
+	colorCommentBg      = "235" // dimmed background for comment display rows
+	colorCommentFg      = "245" // muted foreground for comment body text
 )
 
 // Model is the Bubble Tea model for the cr TUI.
@@ -241,10 +243,16 @@ func (m Model) handleAction(action keys.Action) (tea.Model, tea.Cmd) {
 		m.switchToNextFile()
 	case keys.ActionPrevFile:
 		m.switchToPrevFile()
+	case keys.ActionNextComment:
+		m.jumpToNextComment()
+	case keys.ActionPrevComment:
+		m.jumpToPrevComment()
+	case keys.ActionCommentEdit:
+		m.editComment()
+	case keys.ActionCommentDelete:
+		m.deleteComment()
 	// Recognized but no-op until later tickets
-	case keys.ActionNextComment, keys.ActionPrevComment:
 	case keys.ActionExpandBelow, keys.ActionExpandAbove:
-	case keys.ActionCommentEdit, keys.ActionCommentDelete:
 	case keys.ActionVisualSelect:
 	case keys.ActionCommentAdd:
 		m.openCommentOverlay()
@@ -378,6 +386,11 @@ func (m Model) View() string {
 			continue
 		}
 
+		if p.IsComment {
+			rows = append(rows, m.renderCommentRow(p, paneWidth, isCursor))
+			continue
+		}
+
 		// Prepare highlighted content for each side
 		leftHL, rightHL := m.highlightPair(p)
 
@@ -391,7 +404,7 @@ func (m Model) View() string {
 
 	// If tree is open, render tree panel alongside diff
 	if m.tree.Open {
-		treeOutput := RenderTree(&m.tree, treeWidth, vis, m.activeFile)
+		treeOutput := RenderTree(&m.tree, treeWidth, vis, m.activeFile, m.treeCommentCounts())
 		diffContent = lipgloss.JoinHorizontal(lipgloss.Top, treeOutput, "│", diffContent)
 	}
 
@@ -570,6 +583,32 @@ func (m Model) renderBlankPadding(paneWidth int, isCursor, isActiveSide bool) st
 	return style.Render(blank)
 }
 
+// renderCommentRow renders a comment display row spanning both panes.
+func (m Model) renderCommentRow(p diff.PairedLine, paneWidth int, isCursor bool) string {
+	totalWidth := paneWidth*2 + 1
+	text := "💬 " + p.CommentBody
+
+	// Clip or pad to total width
+	displayWidth := ansi.StringWidth(text)
+	if displayWidth > totalWidth {
+		text = ansi.Truncate(text, totalWidth, "")
+		displayWidth = ansi.StringWidth(text)
+	}
+	if displayWidth < totalWidth {
+		text = text + strings.Repeat(" ", totalWidth-displayWidth)
+	}
+
+	style := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(colorCommentFg)).
+		Background(lipgloss.Color(colorCommentBg))
+
+	if isCursor {
+		style = style.Background(lipgloss.Color(colorCursorActive))
+	}
+
+	return style.Render(text)
+}
+
 // renderSeparator renders a hunk separator row.
 func (m Model) renderSeparator(paneWidth int) string {
 	totalWidth := paneWidth*2 + 1
@@ -648,7 +687,10 @@ func (m *Model) openCommentOverlay() {
 		return
 	}
 
-	// TODO: guard for IsComment rows when CR-013 adds comment display rows
+	// Guard: comment display row
+	if p.IsComment {
+		return
+	}
 
 	// Guard: get the line on the active side
 	line := m.activeSideLine(p)
@@ -679,18 +721,21 @@ func (m Model) handleCommentKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		body := strings.TrimSpace(m.overlay.Value())
 		if body != "" && m.store != nil {
-			filePath := m.activeFilePath()
-			p := m.paired[m.overlay.RowIndex]
-			line := m.activeSideLine(p)
-			snippet := ""
-			if line != nil {
-				snippet = strings.TrimSpace(line.Content)
+			if m.overlay.editingID != "" {
+				// Edit existing comment
+				_ = m.store.EditComment(m.overlay.editingID, body)
+			} else {
+				// Add new comment
+				filePath := m.activeFilePath()
+				p := m.paired[m.overlay.RowIndex]
+				line := m.activeSideLine(p)
+				snippet := ""
+				if line != nil {
+					snippet = strings.TrimSpace(line.Content)
+				}
+				_ = m.store.AddComment(filePath, m.overlay.Line, 0, snippet, body)
 			}
-			if err := m.store.AddComment(filePath, m.overlay.Line, 0, snippet, body); err != nil {
-				// TODO: surface error in status bar when error display is available
-				_ = err
-			}
-			// TODO: insert comment display row into m.paired when CR-013 adds comment rendering
+			m.rebuildPairedLines()
 		}
 		m.overlay = CommentOverlay{}
 		m.mode = InputModeNormal
@@ -782,6 +827,123 @@ func placeOverlayLine(bgLine, overlayLine string, xOffset, totalWidth int) strin
 	}
 
 	return left + overlayLine + right
+}
+
+// treeCommentCounts returns a map of file path → comment count for tree rendering.
+func (m Model) treeCommentCounts() map[string]int {
+	if m.store == nil {
+		return nil
+	}
+	counts := make(map[string]int)
+	for _, f := range m.files {
+		path := f.NewName
+		if path == "" {
+			path = f.OldName
+		}
+		n := len(m.store.Comments(path))
+		if n > 0 {
+			counts[path] = n
+		}
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	return counts
+}
+
+// rebuildPairedLines rebuilds the paired lines for the active file,
+// inserting comment display rows from the store.
+func (m *Model) rebuildPairedLines() {
+	if len(m.files) == 0 || m.activeFile >= len(m.files) {
+		return
+	}
+	base := diff.BuildPairedLines(m.files[m.activeFile].Hunks)
+
+	if m.store != nil {
+		filePath := m.activeFilePath()
+		comments := m.store.Comments(filePath)
+		if len(comments) > 0 {
+			// Build the line→comment map for the active side
+			cm := make(map[int]diff.CommentInfo, len(comments))
+			for _, c := range comments {
+				cm[c.Line] = diff.CommentInfo{ID: c.ID, Body: c.Body, Line: c.Line}
+			}
+			side := diff.SideNew
+			if m.activeSide == SideOld {
+				side = diff.SideOld
+			}
+			base = diff.InsertCommentRows(base, cm, side)
+		}
+	}
+
+	m.paired = base
+	// Also update the allPaired cache for this file
+	if m.allPaired != nil && m.activeFile < len(m.allPaired) {
+		m.allPaired[m.activeFile] = base
+	}
+}
+
+// jumpToNextComment scans forward from cursor for the next comment row.
+func (m *Model) jumpToNextComment() {
+	for i := m.cursorRow + 1; i < len(m.paired); i++ {
+		if m.paired[i].IsComment {
+			m.cursorRow = i
+			m.scrollToCursor()
+			return
+		}
+	}
+}
+
+// jumpToPrevComment scans backward from cursor for the previous comment row.
+func (m *Model) jumpToPrevComment() {
+	for i := m.cursorRow - 1; i >= 0; i-- {
+		if m.paired[i].IsComment {
+			m.cursorRow = i
+			m.scrollToCursor()
+			return
+		}
+	}
+}
+
+// editComment opens the comment overlay pre-filled with the existing comment body.
+func (m *Model) editComment() {
+	if len(m.paired) == 0 || m.cursorRow >= len(m.paired) {
+		return
+	}
+	p := m.paired[m.cursorRow]
+	if !p.IsComment {
+		return
+	}
+
+	m.overlay = NewCommentOverlay(0, m.activeSide, m.cursorRow)
+	m.overlay.Input.SetValue(p.CommentBody)
+	m.overlay.editingID = p.CommentID
+	m.mode = InputModeComment
+}
+
+// deleteComment removes the comment under the cursor and rebuilds paired lines.
+func (m *Model) deleteComment() {
+	if len(m.paired) == 0 || m.cursorRow >= len(m.paired) {
+		return
+	}
+	p := m.paired[m.cursorRow]
+	if !p.IsComment {
+		return
+	}
+	if m.store == nil {
+		return
+	}
+
+	_ = m.store.DeleteComment(p.CommentID)
+
+	// Move cursor up to the code line above
+	if m.cursorRow > 0 {
+		m.cursorRow--
+	}
+
+	m.rebuildPairedLines()
+	m.clampCursor()
+	m.scrollToCursor()
 }
 
 // countFileChanges counts insertions and deletions in the active file's hunks.

@@ -353,6 +353,170 @@ func assertPairLeftNil(t *testing.T, p PairedLine, wantRight string) {
 	}
 }
 
+func TestInsertCommentRows(t *testing.T) {
+	tests := []struct {
+		name     string
+		hunks    []Hunk
+		comments map[int]CommentInfo // line number → comment info
+		check    func(t *testing.T, pairs []PairedLine)
+	}{
+		{
+			name: "no comments leaves pairs unchanged",
+			hunks: []Hunk{
+				{
+					OldStart: 1, OldCount: 2, NewStart: 1, NewCount: 2,
+					Lines: []DiffLine{
+						{Type: LineContext, OldNum: 1, NewNum: 1, Content: "hello"},
+						{Type: LineContext, OldNum: 2, NewNum: 2, Content: "world"},
+					},
+				},
+			},
+			comments: nil,
+			check: func(t *testing.T, pairs []PairedLine) {
+				if len(pairs) != 2 {
+					t.Errorf("expected 2 pairs, got %d", len(pairs))
+				}
+				for _, p := range pairs {
+					if p.IsComment {
+						t.Error("no pairs should be comment rows")
+					}
+				}
+			},
+		},
+		{
+			name: "comment inserted after matching line",
+			hunks: []Hunk{
+				{
+					OldStart: 1, OldCount: 2, NewStart: 1, NewCount: 2,
+					Lines: []DiffLine{
+						{Type: LineContext, OldNum: 1, NewNum: 1, Content: "hello"},
+						{Type: LineContext, OldNum: 2, NewNum: 2, Content: "world"},
+					},
+				},
+			},
+			comments: map[int]CommentInfo{
+				1: {ID: "abc123", Body: "test comment", Line: 1},
+			},
+			check: func(t *testing.T, pairs []PairedLine) {
+				if len(pairs) != 3 {
+					t.Fatalf("expected 3 pairs (2 code + 1 comment), got %d", len(pairs))
+				}
+				if pairs[0].IsComment {
+					t.Error("first pair should not be a comment row")
+				}
+				if !pairs[1].IsComment {
+					t.Fatal("second pair should be a comment row")
+				}
+				if pairs[1].CommentBody != "test comment" {
+					t.Errorf("CommentBody: got %q, want %q", pairs[1].CommentBody, "test comment")
+				}
+				if pairs[1].CommentID != "abc123" {
+					t.Errorf("CommentID: got %q, want %q", pairs[1].CommentID, "abc123")
+				}
+				if pairs[2].IsComment {
+					t.Error("third pair should not be a comment row")
+				}
+			},
+		},
+		{
+			name: "multiple comments on different lines",
+			hunks: []Hunk{
+				{
+					OldStart: 1, OldCount: 3, NewStart: 1, NewCount: 3,
+					Lines: []DiffLine{
+						{Type: LineContext, OldNum: 1, NewNum: 1, Content: "line1"},
+						{Type: LineContext, OldNum: 2, NewNum: 2, Content: "line2"},
+						{Type: LineContext, OldNum: 3, NewNum: 3, Content: "line3"},
+					},
+				},
+			},
+			comments: map[int]CommentInfo{
+				1: {ID: "id1", Body: "first comment", Line: 1},
+				3: {ID: "id2", Body: "third comment", Line: 3},
+			},
+			check: func(t *testing.T, pairs []PairedLine) {
+				// 3 code lines + 2 comment rows = 5
+				if len(pairs) != 5 {
+					t.Fatalf("expected 5 pairs, got %d", len(pairs))
+				}
+				// [0]=code(L1), [1]=comment(L1), [2]=code(L2), [3]=code(L3), [4]=comment(L3)
+				if !pairs[1].IsComment {
+					t.Error("pairs[1] should be comment row after line 1")
+				}
+				if !pairs[4].IsComment {
+					t.Error("pairs[4] should be comment row after line 3")
+				}
+			},
+		},
+		{
+			name: "comment after add line uses NewNum",
+			hunks: []Hunk{
+				{
+					OldStart: 1, OldCount: 1, NewStart: 1, NewCount: 2,
+					Lines: []DiffLine{
+						{Type: LineContext, OldNum: 1, NewNum: 1, Content: "context"},
+						{Type: LineAdd, NewNum: 2, Content: "added"},
+					},
+				},
+			},
+			comments: map[int]CommentInfo{
+				2: {ID: "add1", Body: "comment on added", Line: 2},
+			},
+			check: func(t *testing.T, pairs []PairedLine) {
+				if len(pairs) != 3 {
+					t.Fatalf("expected 3 pairs, got %d", len(pairs))
+				}
+				if !pairs[2].IsComment {
+					t.Error("pairs[2] should be comment row after added line")
+				}
+				if pairs[2].CommentBody != "comment on added" {
+					t.Errorf("CommentBody: got %q", pairs[2].CommentBody)
+				}
+			},
+		},
+		{
+			name: "comment not inserted after separator rows",
+			hunks: []Hunk{
+				{
+					OldStart: 1, OldCount: 1, NewStart: 1, NewCount: 1,
+					Lines: []DiffLine{
+						{Type: LineContext, OldNum: 1, NewNum: 1, Content: "h1"},
+					},
+				},
+				{
+					OldStart: 10, OldCount: 1, NewStart: 10, NewCount: 1,
+					Lines: []DiffLine{
+						{Type: LineContext, OldNum: 10, NewNum: 10, Content: "h2"},
+					},
+				},
+			},
+			comments: map[int]CommentInfo{
+				1: {ID: "c1", Body: "on h1", Line: 1},
+			},
+			check: func(t *testing.T, pairs []PairedLine) {
+				// 1 code + 1 comment + separator + 1 code = 4
+				if len(pairs) != 4 {
+					t.Fatalf("expected 4 pairs, got %d", len(pairs))
+				}
+				if !pairs[1].IsComment {
+					t.Error("pairs[1] should be comment row")
+				}
+				if !pairs[2].IsSeparator {
+					t.Error("pairs[2] should be separator")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pairs := BuildPairedLines(tt.hunks)
+			pairs = InsertCommentRows(pairs, tt.comments, SideNew)
+			tt.check(t, pairs)
+		})
+	}
+}
+
 func assertPairRightNil(t *testing.T, p PairedLine, wantLeft string) {
 	t.Helper()
 	if p.Left == nil {

@@ -861,3 +861,363 @@ func TestCommentCountInStatusBar(t *testing.T) {
 		t.Error("status bar should show C:1 after adding a comment")
 	}
 }
+
+// --- CR-013: Comment Display, Navigation, Edit, Delete ---
+
+// newTestModelWithComments creates a model with a comment already added and paired lines rebuilt.
+func newTestModelWithComments(t *testing.T, width, height int) Model {
+	t.Helper()
+	pairs := buildTestPairs()
+	m := newTestModelWithStore(t, pairs, width, height)
+	// Add a comment on line 1 (NewNum of first context line)
+	_ = m.store.AddComment("test.go", 1, 0, "context line one", "my test comment")
+	m.rebuildPairedLines()
+	return m
+}
+
+func TestCommentRowRendering(t *testing.T) {
+	m := newTestModelWithComments(t, 120, 40)
+
+	output := m.View()
+	if !strings.Contains(output, "💬") {
+		t.Error("expected 💬 prefix in rendered comment row")
+	}
+	if !strings.Contains(output, "my test comment") {
+		t.Error("expected comment body text in rendered output")
+	}
+}
+
+func TestCommentRowsInPairedLines(t *testing.T) {
+	m := newTestModelWithComments(t, 120, 40)
+
+	// Should have original pairs + 1 comment row
+	foundComment := false
+	for _, p := range m.paired {
+		if p.IsComment {
+			foundComment = true
+			if p.CommentBody != "my test comment" {
+				t.Errorf("CommentBody: got %q, want %q", p.CommentBody, "my test comment")
+			}
+		}
+	}
+	if !foundComment {
+		t.Error("expected at least one comment row in paired lines")
+	}
+}
+
+func TestCommentRowScrollsWithDiff(t *testing.T) {
+	m := newTestModelWithComments(t, 120, 40)
+
+	// Cursor can land on a comment row via j/k
+	// Find where the comment row is
+	commentIdx := -1
+	for i, p := range m.paired {
+		if p.IsComment {
+			commentIdx = i
+			break
+		}
+	}
+	if commentIdx < 0 {
+		t.Fatal("no comment row found")
+	}
+
+	// Navigate to comment row
+	for i := 0; i < commentIdx; i++ {
+		newModel, _ := m.Update(keyMsg("j"))
+		m = newModel.(Model)
+	}
+	if m.cursorRow != commentIdx {
+		t.Errorf("cursorRow: got %d, want %d", m.cursorRow, commentIdx)
+	}
+}
+
+func TestCommentNavigationNextPrev(t *testing.T) {
+	t.Run("]m jumps to next comment row", func(t *testing.T) {
+		m := newTestModelWithComments(t, 120, 40)
+		// Start at row 0, comment should be at row 1
+		newModel, _ := m.Update(keyMsg("]"))
+		m = newModel.(Model)
+		newModel, _ = m.Update(keyMsg("m"))
+		m = newModel.(Model)
+
+		if !m.paired[m.cursorRow].IsComment {
+			t.Errorf("expected cursor on comment row, got cursorRow=%d IsComment=%v",
+				m.cursorRow, m.paired[m.cursorRow].IsComment)
+		}
+	})
+
+	t.Run("[m jumps to prev comment row", func(t *testing.T) {
+		m := newTestModelWithComments(t, 120, 40)
+		// Move past the comment
+		for i := 0; i < 4; i++ {
+			newModel, _ := m.Update(keyMsg("j"))
+			m = newModel.(Model)
+		}
+		// Jump back to prev comment
+		newModel, _ := m.Update(keyMsg("["))
+		m = newModel.(Model)
+		newModel, _ = m.Update(keyMsg("m"))
+		m = newModel.(Model)
+
+		if !m.paired[m.cursorRow].IsComment {
+			t.Errorf("expected cursor on comment row, got cursorRow=%d", m.cursorRow)
+		}
+	})
+
+	t.Run("]m with no more comments does nothing", func(t *testing.T) {
+		m := newTestModelWithComments(t, 120, 40)
+		// Move to comment row first
+		newModel, _ := m.Update(keyMsg("]"))
+		m = newModel.(Model)
+		newModel, _ = m.Update(keyMsg("m"))
+		m = newModel.(Model)
+		prevRow := m.cursorRow
+
+		// Try to jump to next — no more comments
+		newModel, _ = m.Update(keyMsg("]"))
+		m = newModel.(Model)
+		newModel, _ = m.Update(keyMsg("m"))
+		m = newModel.(Model)
+
+		if m.cursorRow != prevRow {
+			t.Errorf("cursorRow should stay at %d, got %d", prevRow, m.cursorRow)
+		}
+	})
+}
+
+func TestCommentEdit(t *testing.T) {
+	t.Run("e on comment row opens overlay pre-filled", func(t *testing.T) {
+		m := newTestModelWithComments(t, 120, 40)
+		// Navigate to the comment row
+		commentIdx := -1
+		for i, p := range m.paired {
+			if p.IsComment {
+				commentIdx = i
+				break
+			}
+		}
+		for i := 0; i < commentIdx; i++ {
+			newModel, _ := m.Update(keyMsg("j"))
+			m = newModel.(Model)
+		}
+
+		// Press e to edit
+		newModel, _ := m.Update(keyMsg("e"))
+		m = newModel.(Model)
+
+		if m.mode != InputModeComment {
+			t.Errorf("mode: got %v, want InputModeComment", m.mode)
+		}
+		if !m.overlay.Active {
+			t.Error("overlay should be active")
+		}
+		if m.overlay.Value() != "my test comment" {
+			t.Errorf("overlay value: got %q, want %q", m.overlay.Value(), "my test comment")
+		}
+	})
+
+	t.Run("e on non-comment row does nothing", func(t *testing.T) {
+		m := newTestModelWithComments(t, 120, 40)
+		// Cursor on row 0 (code line)
+		newModel, _ := m.Update(keyMsg("e"))
+		m = newModel.(Model)
+
+		if m.mode != InputModeNormal {
+			t.Errorf("mode: got %v, want InputModeNormal", m.mode)
+		}
+		if m.overlay.Active {
+			t.Error("overlay should not be active on non-comment row")
+		}
+	})
+
+	t.Run("edit submit updates comment body", func(t *testing.T) {
+		m := newTestModelWithComments(t, 120, 40)
+		// Navigate to comment row
+		commentIdx := -1
+		for i, p := range m.paired {
+			if p.IsComment {
+				commentIdx = i
+				break
+			}
+		}
+		for i := 0; i < commentIdx; i++ {
+			newModel, _ := m.Update(keyMsg("j"))
+			m = newModel.(Model)
+		}
+
+		// Press e, clear and type new body, submit
+		newModel, _ := m.Update(keyMsg("e"))
+		m = newModel.(Model)
+
+		// Select all and clear the pre-filled text
+		// Use Ctrl+A to select all, then type replacement
+		// Actually simpler: just use the textinput API directly for test
+		m.overlay.Input.SetValue("updated comment")
+
+		// Submit
+		newModel, _ = m.Update(enterKeyMsg())
+		m = newModel.(Model)
+
+		if m.mode != InputModeNormal {
+			t.Errorf("mode after edit submit: got %v, want InputModeNormal", m.mode)
+		}
+
+		comments := m.store.Comments("test.go")
+		if len(comments) != 1 {
+			t.Fatalf("expected 1 comment, got %d", len(comments))
+		}
+		if comments[0].Body != "updated comment" {
+			t.Errorf("comment body: got %q, want %q", comments[0].Body, "updated comment")
+		}
+	})
+}
+
+func TestCommentDelete(t *testing.T) {
+	t.Run("dc on comment row deletes it", func(t *testing.T) {
+		m := newTestModelWithComments(t, 120, 40)
+		pairsBeforeDelete := len(m.paired)
+
+		// Navigate to the comment row
+		commentIdx := -1
+		for i, p := range m.paired {
+			if p.IsComment {
+				commentIdx = i
+				break
+			}
+		}
+		for i := 0; i < commentIdx; i++ {
+			newModel, _ := m.Update(keyMsg("j"))
+			m = newModel.(Model)
+		}
+
+		// Press dc to delete
+		newModel, _ := m.Update(keyMsg("d"))
+		m = newModel.(Model)
+		newModel, _ = m.Update(keyMsg("c"))
+		m = newModel.(Model)
+
+		// Comment should be gone from store
+		comments := m.store.Comments("test.go")
+		if len(comments) != 0 {
+			t.Errorf("expected 0 comments after delete, got %d", len(comments))
+		}
+
+		// Paired lines should be shorter (comment row removed)
+		if len(m.paired) >= pairsBeforeDelete {
+			t.Errorf("paired lines should have fewer entries after delete, got %d (was %d)", len(m.paired), pairsBeforeDelete)
+		}
+
+		// No IsComment rows should remain
+		for _, p := range m.paired {
+			if p.IsComment {
+				t.Error("no comment rows should remain after deletion")
+			}
+		}
+	})
+
+	t.Run("dc on non-comment row does nothing", func(t *testing.T) {
+		m := newTestModelWithComments(t, 120, 40)
+		commentsBefore := len(m.store.Comments("test.go"))
+
+		// Cursor on row 0 (code line)
+		newModel, _ := m.Update(keyMsg("d"))
+		m = newModel.(Model)
+		newModel, _ = m.Update(keyMsg("c"))
+		m = newModel.(Model)
+
+		commentsAfter := len(m.store.Comments("test.go"))
+		if commentsAfter != commentsBefore {
+			t.Errorf("comments: got %d, want %d (no change)", commentsAfter, commentsBefore)
+		}
+	})
+
+	t.Run("cursor moves up after delete", func(t *testing.T) {
+		m := newTestModelWithComments(t, 120, 40)
+		commentIdx := -1
+		for i, p := range m.paired {
+			if p.IsComment {
+				commentIdx = i
+				break
+			}
+		}
+		for i := 0; i < commentIdx; i++ {
+			newModel, _ := m.Update(keyMsg("j"))
+			m = newModel.(Model)
+		}
+
+		// Delete the comment
+		newModel, _ := m.Update(keyMsg("d"))
+		m = newModel.(Model)
+		newModel, _ = m.Update(keyMsg("c"))
+		m = newModel.(Model)
+
+		// Cursor should be on the code line above (commentIdx - 1)
+		expectedRow := commentIdx - 1
+		if expectedRow < 0 {
+			expectedRow = 0
+		}
+		if m.cursorRow != expectedRow {
+			t.Errorf("cursorRow after delete: got %d, want %d", m.cursorRow, expectedRow)
+		}
+	})
+}
+
+func TestCommentAddIsCommentGuard(t *testing.T) {
+	m := newTestModelWithComments(t, 120, 40)
+	// Navigate to comment row
+	commentIdx := -1
+	for i, p := range m.paired {
+		if p.IsComment {
+			commentIdx = i
+			break
+		}
+	}
+	for i := 0; i < commentIdx; i++ {
+		newModel, _ := m.Update(keyMsg("j"))
+		m = newModel.(Model)
+	}
+
+	// Press c on a comment row — should NOT open overlay
+	newModel, _ := m.Update(keyMsg("c"))
+	m = newModel.(Model)
+
+	if m.mode != InputModeNormal {
+		t.Errorf("mode: got %v, want InputModeNormal (c on comment row should be no-op)", m.mode)
+	}
+	if m.overlay.Active {
+		t.Error("overlay should not open on comment row")
+	}
+}
+
+func TestCommentSubmissionRebuildsPairedLines(t *testing.T) {
+	m := newTestModelWithStore(t, buildTestPairs(), 120, 40)
+	pairsBefore := len(m.paired)
+
+	// Press c to open overlay
+	newModel, _ := m.Update(keyMsg("c"))
+	m = newModel.(Model)
+
+	// Type body and submit
+	for _, r := range "new comment" {
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = newModel.(Model)
+	}
+	newModel, _ = m.Update(enterKeyMsg())
+	m = newModel.(Model)
+
+	// Paired lines should now include a comment row
+	if len(m.paired) <= pairsBefore {
+		t.Errorf("paired lines should grow after comment submission, got %d (was %d)", len(m.paired), pairsBefore)
+	}
+
+	foundComment := false
+	for _, p := range m.paired {
+		if p.IsComment && p.CommentBody == "new comment" {
+			foundComment = true
+			break
+		}
+	}
+	if !foundComment {
+		t.Error("expected comment row with 'new comment' body after submission")
+	}
+}
