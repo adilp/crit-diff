@@ -1236,3 +1236,281 @@ func TestCommentSubmissionRebuildsPairedLines(t *testing.T) {
 		t.Error("expected comment row with 'new comment' body after submission")
 	}
 }
+
+// --- CR-014: Visual Select Mode and Range Comments ---
+
+func TestVisualSelectMode(t *testing.T) {
+	tests := []struct {
+		name            string
+		setupModel      func(t *testing.T) Model
+		keys            []tea.KeyMsg
+		wantMode        InputMode
+		wantVisualStart int
+		wantCursorRow   int
+	}{
+		{
+			name: "V enters visual mode and sets anchor",
+			setupModel: func(t *testing.T) Model {
+				m := newTestModelWithStore(t, buildTestPairs(), 120, 40)
+				m.cursorRow = 1
+				return m
+			},
+			keys:            []tea.KeyMsg{keyMsg("V")},
+			wantMode:        InputModeVisual,
+			wantVisualStart: 1,
+			wantCursorRow:   1,
+		},
+		{
+			name: "j extends selection downward",
+			setupModel: func(t *testing.T) Model {
+				return newTestModelWithStore(t, buildTestPairs(), 120, 40)
+			},
+			keys:            []tea.KeyMsg{keyMsg("V"), keyMsg("j"), keyMsg("j")},
+			wantMode:        InputModeVisual,
+			wantVisualStart: 0,
+			wantCursorRow:   2,
+		},
+		{
+			name: "k extends selection upward",
+			setupModel: func(t *testing.T) Model {
+				m := newTestModelWithStore(t, buildTestPairs(), 120, 40)
+				m.cursorRow = 2
+				return m
+			},
+			keys:            []tea.KeyMsg{keyMsg("V"), keyMsg("k")},
+			wantMode:        InputModeVisual,
+			wantVisualStart: 2,
+			wantCursorRow:   1,
+		},
+		{
+			name: "Esc cancels visual mode",
+			setupModel: func(t *testing.T) Model {
+				return newTestModelWithStore(t, buildTestPairs(), 120, 40)
+			},
+			keys:          []tea.KeyMsg{keyMsg("V"), keyMsg("j"), escKeyMsg()},
+			wantMode:      InputModeNormal,
+			wantCursorRow: 1,
+		},
+		{
+			name: "V on separator row does nothing",
+			setupModel: func(t *testing.T) Model {
+				m := newTestModelWithStore(t, buildMultiHunkPairs(), 120, 40)
+				m.cursorRow = 2 // separator row
+				return m
+			},
+			keys:          []tea.KeyMsg{keyMsg("V")},
+			wantMode:      InputModeNormal,
+			wantCursorRow: 2,
+		},
+		{
+			name: "V on comment row does nothing",
+			setupModel: func(t *testing.T) Model {
+				m := newTestModelWithComments(t, 120, 40)
+				// Navigate to comment row
+				commentIdx := -1
+				for i, p := range m.paired {
+					if p.IsComment {
+						commentIdx = i
+						break
+					}
+				}
+				m.cursorRow = commentIdx
+				return m
+			},
+			keys:          []tea.KeyMsg{keyMsg("V")},
+			wantMode:      InputModeNormal,
+			wantCursorRow: 1, // comment row is at index 1
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := tt.setupModel(t)
+			for _, key := range tt.keys {
+				newModel, _ := m.Update(key)
+				m = newModel.(Model)
+			}
+
+			if m.mode != tt.wantMode {
+				t.Errorf("mode: got %v, want %v", m.mode, tt.wantMode)
+			}
+			if tt.wantMode == InputModeVisual && m.visualStart != tt.wantVisualStart {
+				t.Errorf("visualStart: got %d, want %d", m.visualStart, tt.wantVisualStart)
+			}
+			if m.cursorRow != tt.wantCursorRow {
+				t.Errorf("cursorRow: got %d, want %d", m.cursorRow, tt.wantCursorRow)
+			}
+		})
+	}
+}
+
+func TestVisualSelectPaneSwitching(t *testing.T) {
+	m := newTestModelWithStore(t, buildTestPairs(), 120, 40)
+	// Enter visual mode
+	newModel, _ := m.Update(keyMsg("V"))
+	m = newModel.(Model)
+
+	if m.activeSide != SideNew {
+		t.Fatalf("expected SideNew initially, got %v", m.activeSide)
+	}
+
+	// Press h to switch to old pane
+	newModel, _ = m.Update(keyMsg("h"))
+	m = newModel.(Model)
+
+	if m.mode != InputModeVisual {
+		t.Errorf("should stay in visual mode after h, got %v", m.mode)
+	}
+	if m.activeSide != SideOld {
+		t.Errorf("activeSide: got %v, want SideOld", m.activeSide)
+	}
+
+	// Press l to switch back to new pane
+	newModel, _ = m.Update(keyMsg("l"))
+	m = newModel.(Model)
+
+	if m.activeSide != SideNew {
+		t.Errorf("activeSide: got %v, want SideNew", m.activeSide)
+	}
+}
+
+func TestVisualSelectCommentCreation(t *testing.T) {
+	t.Run("c in visual mode opens overlay with range header", func(t *testing.T) {
+		m := newTestModelWithStore(t, buildTestPairs(), 120, 40)
+		// V on row 0, j to extend to row 1, then c to comment
+		newModel, _ := m.Update(keyMsg("V"))
+		m = newModel.(Model)
+		newModel, _ = m.Update(keyMsg("j"))
+		m = newModel.(Model)
+		newModel, _ = m.Update(keyMsg("c"))
+		m = newModel.(Model)
+
+		if m.mode != InputModeComment {
+			t.Errorf("mode: got %v, want InputModeComment", m.mode)
+		}
+		if !m.overlay.Active {
+			t.Error("overlay should be active")
+		}
+
+		// Overlay should show range in the render
+		rendered := m.overlay.Render(120)
+		if !strings.Contains(rendered, "-L") {
+			t.Errorf("overlay should show range header with -L, got: %s", rendered)
+		}
+	})
+
+	t.Run("submitting range comment sets line and end_line", func(t *testing.T) {
+		m := newTestModelWithStore(t, buildTestPairs(), 120, 40)
+		// V on row 0 (NewNum=1), j to row 1 (delete line, no NewNum — skip), then to row 2 (add line NewNum=2)
+		// Actually buildTestPairs: row0=context(1,1), row1=delete(old2), row2=add(new2), row3=context(3,3)
+		// On SideNew: row0 NewNum=1, row1 Right=nil (delete), row2 NewNum=2, row3 NewNum=3
+		// Select row 0 and row 3 (both have NewNum on new side)
+		newModel, _ := m.Update(keyMsg("V"))
+		m = newModel.(Model)
+		for i := 0; i < 3; i++ {
+			newModel, _ = m.Update(keyMsg("j"))
+			m = newModel.(Model)
+		}
+		// Now visualStart=0, cursorRow=3
+		newModel, _ = m.Update(keyMsg("c"))
+		m = newModel.(Model)
+
+		// Type comment and submit
+		for _, r := range "range comment" {
+			newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			m = newModel.(Model)
+		}
+		newModel, _ = m.Update(enterKeyMsg())
+		m = newModel.(Model)
+
+		if m.mode != InputModeNormal {
+			t.Errorf("mode after submit: got %v, want InputModeNormal", m.mode)
+		}
+
+		comments := m.store.Comments("test.go")
+		if len(comments) != 1 {
+			t.Fatalf("expected 1 comment, got %d", len(comments))
+		}
+		c := comments[0]
+		if c.Body != "range comment" {
+			t.Errorf("body: got %q, want %q", c.Body, "range comment")
+		}
+		if c.Line >= c.EndLine {
+			t.Errorf("expected Line < EndLine, got Line=%d EndLine=%d", c.Line, c.EndLine)
+		}
+		if c.EndLine == 0 {
+			t.Errorf("EndLine should be non-zero for range comment, got 0")
+		}
+	})
+
+	t.Run("range comment snippet is first line of range", func(t *testing.T) {
+		m := newTestModelWithStore(t, buildTestPairs(), 120, 40)
+		// Select rows 0-3 (context line one through context line three)
+		newModel, _ := m.Update(keyMsg("V"))
+		m = newModel.(Model)
+		for i := 0; i < 3; i++ {
+			newModel, _ = m.Update(keyMsg("j"))
+			m = newModel.(Model)
+		}
+		newModel, _ = m.Update(keyMsg("c"))
+		m = newModel.(Model)
+
+		for _, r := range "snippet test" {
+			newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			m = newModel.(Model)
+		}
+		newModel, _ = m.Update(enterKeyMsg())
+		m = newModel.(Model)
+
+		comments := m.store.Comments("test.go")
+		if len(comments) != 1 {
+			t.Fatalf("expected 1 comment, got %d", len(comments))
+		}
+		if comments[0].ContentSnippet != "context line one" {
+			t.Errorf("snippet: got %q, want %q", comments[0].ContentSnippet, "context line one")
+		}
+	})
+}
+
+func TestVisualSelectHelpBar(t *testing.T) {
+	output := RenderHelpBar(120, InputModeVisual)
+	if !strings.Contains(output, "j/k") {
+		t.Error("visual mode help bar should mention j/k")
+	}
+	if !strings.Contains(output, "extend") {
+		t.Error("visual mode help bar should mention extend")
+	}
+	if !strings.Contains(output, "comment") {
+		t.Error("visual mode help bar should mention comment")
+	}
+	if !strings.Contains(output, "Esc") {
+		t.Error("visual mode help bar should mention Esc")
+	}
+}
+
+func TestVisualSelectRendering(t *testing.T) {
+	m := newTestModelWithStore(t, buildTestPairs(), 120, 40)
+	// Enter visual mode and extend selection
+	newModel, _ := m.Update(keyMsg("V"))
+	m = newModel.(Model)
+	newModel, _ = m.Update(keyMsg("j"))
+	m = newModel.(Model)
+
+	// View should render without crashing
+	output := m.View()
+	if output == "" {
+		t.Error("View() should return non-empty output in visual mode")
+	}
+}
+
+func TestVisualSelectQuit(t *testing.T) {
+	m := newTestModelWithStore(t, buildTestPairs(), 120, 40)
+	newModel, _ := m.Update(keyMsg("V"))
+	m = newModel.(Model)
+
+	// q should still quit from visual mode
+	_, cmd := m.Update(keyMsg("q"))
+	if cmd == nil {
+		t.Error("expected quit command from visual mode")
+	}
+}

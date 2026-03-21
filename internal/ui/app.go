@@ -29,6 +29,7 @@ const (
 	InputModeNormal  InputMode = "normal"
 	InputModeTree    InputMode = "tree"
 	InputModeComment InputMode = "comment"
+	InputModeVisual  InputMode = "visual"
 )
 
 // Style constants for terminal colors.
@@ -76,6 +77,7 @@ type Model struct {
 	newHighlighted []render.HighlightedLine // highlighted lines for new side of active file
 	store          *comment.Store           // comment store for .crit/ persistence
 	overlay        CommentOverlay           // comment input overlay modal
+	visualStart    int                      // row index where V was pressed (visual mode anchor)
 }
 
 // NewModel creates a new TUI model with the given diff data and terminal dimensions.
@@ -150,6 +152,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Comment input mode has its own key handling
 	if m.mode == InputModeComment {
 		return m.handleCommentKey(msg)
+	}
+
+	// Visual mode has its own key handling
+	if m.mode == InputModeVisual {
+		return m.handleVisualKey(msg)
 	}
 
 	// Tree mode has its own key handling
@@ -254,6 +261,7 @@ func (m Model) handleAction(action keys.Action) (tea.Model, tea.Cmd) {
 	// Recognized but no-op until later tickets
 	case keys.ActionExpandBelow, keys.ActionExpandAbove:
 	case keys.ActionVisualSelect:
+		m.enterVisualMode()
 	case keys.ActionCommentAdd:
 		m.openCommentOverlay()
 	case keys.ActionToggleTree:
@@ -377,9 +385,19 @@ func (m Model) View() string {
 		end = len(m.paired)
 	}
 
+	// Compute visual selection range
+	visualMin, visualMax := -1, -1
+	if m.mode == InputModeVisual {
+		visualMin, visualMax = m.visualStart, m.cursorRow
+		if visualMin > visualMax {
+			visualMin, visualMax = visualMax, visualMin
+		}
+	}
+
 	for i := m.yOffset; i < end; i++ {
 		p := m.paired[i]
 		isCursor := i == m.cursorRow
+		isSelected := m.mode == InputModeVisual && i >= visualMin && i <= visualMax && !p.IsSeparator && !p.IsComment
 
 		if p.IsSeparator {
 			rows = append(rows, m.renderSeparator(paneWidth))
@@ -394,8 +412,8 @@ func (m Model) View() string {
 		// Prepare highlighted content for each side
 		leftHL, rightHL := m.highlightPair(p)
 
-		leftStr := m.renderPane(p.Left, SideOld, paneWidth, lineNumWidth, isCursor, m.activeSide == SideOld, leftHL)
-		rightStr := m.renderPane(p.Right, SideNew, paneWidth, lineNumWidth, isCursor, m.activeSide == SideNew, rightHL)
+		leftStr := m.renderPane(p.Left, SideOld, paneWidth, lineNumWidth, isCursor || (isSelected && m.activeSide == SideOld), m.activeSide == SideOld, leftHL)
+		rightStr := m.renderPane(p.Right, SideNew, paneWidth, lineNumWidth, isCursor || (isSelected && m.activeSide == SideNew), m.activeSide == SideNew, rightHL)
 		row := lipgloss.JoinHorizontal(lipgloss.Top, leftStr, "│", rightStr)
 		rows = append(rows, row)
 	}
@@ -727,13 +745,17 @@ func (m Model) handleCommentKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				// Add new comment
 				filePath := m.activeFilePath()
-				p := m.paired[m.overlay.RowIndex]
-				line := m.activeSideLine(p)
-				snippet := ""
-				if line != nil {
-					snippet = strings.TrimSpace(line.Content)
+				endLine := m.overlay.EndLine
+				snippet := m.overlay.rangeSnippet
+				if snippet == "" {
+					// Single-line comment: get snippet from cursor line
+					p := m.paired[m.overlay.RowIndex]
+					line := m.activeSideLine(p)
+					if line != nil {
+						snippet = strings.TrimSpace(line.Content)
+					}
 				}
-				_ = m.store.AddComment(filePath, m.overlay.Line, 0, snippet, body)
+				_ = m.store.AddComment(filePath, m.overlay.Line, endLine, snippet, body)
 			}
 			m.rebuildPairedLines()
 		}
@@ -955,6 +977,105 @@ func (m *Model) deleteComment() {
 	m.rebuildPairedLines()
 	m.clampCursor()
 	m.scrollToCursor()
+}
+
+// enterVisualMode starts visual selection at the current cursor position.
+// No-op on separator or comment rows.
+func (m *Model) enterVisualMode() {
+	if len(m.paired) == 0 || m.cursorRow >= len(m.paired) {
+		return
+	}
+	p := m.paired[m.cursorRow]
+	if p.IsSeparator || p.IsComment {
+		return
+	}
+	m.visualStart = m.cursorRow
+	m.mode = InputModeVisual
+}
+
+// handleVisualKey handles key input when in visual select mode.
+func (m Model) handleVisualKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.mode = InputModeNormal
+		return m, nil
+	case tea.KeyRunes:
+		switch string(msg.Runes) {
+		case "j":
+			if m.cursorRow < len(m.paired)-1 {
+				m.cursorRow++
+			}
+			m.scrollToCursor()
+		case "k":
+			if m.cursorRow > 0 {
+				m.cursorRow--
+			}
+			m.scrollToCursor()
+		case "h":
+			m.activeSide = SideOld
+		case "l":
+			m.activeSide = SideNew
+		case "c":
+			m.openRangeCommentOverlay()
+		case "q":
+			return m, tea.Quit
+		}
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+// openRangeCommentOverlay opens the comment overlay for the visual selection range.
+func (m *Model) openRangeCommentOverlay() {
+	if m.store == nil {
+		return
+	}
+
+	// Determine the selected range
+	startRow := m.visualStart
+	endRow := m.cursorRow
+	if startRow > endRow {
+		startRow, endRow = endRow, startRow
+	}
+
+	// Find the line numbers from code lines in the range (skip separator/comment rows)
+	var startLine, endLine int
+	var snippet string
+	for i := startRow; i <= endRow; i++ {
+		p := m.paired[i]
+		if p.IsSeparator || p.IsComment {
+			continue
+		}
+		line := m.activeSideLine(p)
+		if line == nil {
+			continue
+		}
+		lineNum := m.activeSideLineNum(line)
+		if startLine == 0 || lineNum < startLine {
+			startLine = lineNum
+		}
+		if lineNum > endLine {
+			endLine = lineNum
+		}
+		if snippet == "" {
+			snippet = strings.TrimSpace(line.Content)
+		}
+	}
+
+	if startLine == 0 {
+		return // no valid code lines in selection
+	}
+
+	// If start and end are the same, treat as single-line comment
+	if startLine == endLine {
+		endLine = 0
+	}
+
+	m.overlay = NewCommentOverlay(startLine, m.activeSide, m.cursorRow)
+	m.overlay.EndLine = endLine
+	m.overlay.rangeSnippet = snippet
+	m.mode = InputModeComment
 }
 
 // countFileChanges counts insertions and deletions in the active file's hunks.

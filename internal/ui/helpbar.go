@@ -38,6 +38,12 @@ func RenderHelpBar(width int, mode InputMode) string {
 			{"Enter", "submit"},
 			{"Esc", "cancel"},
 		}
+	case InputModeVisual:
+		hints = []hint{
+			{"j/k", "extend"},
+			{"c", "comment"},
+			{"Esc", "cancel"},
+		}
 	default:
 		hints = []hint{
 			{"Esc", "back"},

@@ -9,12 +9,14 @@ import (
 
 // CommentOverlay holds the state for the comment input modal.
 type CommentOverlay struct {
-	Active    bool
-	Input     textinput.Model
-	Line      int    // file line number being commented
-	Side      Side   // old or new
-	RowIndex  int    // row in paired lines (for positioning)
-	editingID string // non-empty when editing an existing comment (stores comment ID)
+	Active       bool
+	Input        textinput.Model
+	Line         int    // file line number being commented
+	EndLine      int    // end line for range comments (0 = single-line)
+	Side         Side   // old or new
+	RowIndex     int    // row in paired lines (for positioning)
+	editingID    string // non-empty when editing an existing comment (stores comment ID)
+	rangeSnippet string // content snippet for range comments (first line of range)
 }
 
 // NewCommentOverlay creates a new active comment overlay for the given line.
@@ -54,7 +56,12 @@ func (o *CommentOverlay) Render(width int) string {
 		overlayWidth = width
 	}
 
-	header := fmt.Sprintf(" Comment on L%d (%s):", o.Line, string(o.Side))
+	var header string
+	if o.EndLine > 0 {
+		header = fmt.Sprintf(" Comment on L%d-L%d (%s):", o.Line, o.EndLine, string(o.Side))
+	} else {
+		header = fmt.Sprintf(" Comment on L%d (%s):", o.Line, string(o.Side))
+	}
 
 	// Set input width to overlay width minus border (2) and left padding (1)
 	o.Input.Width = overlayWidth - 3
