@@ -26,6 +26,7 @@ type InputMode string
 
 const (
 	InputModeNormal InputMode = "normal"
+	InputModeTree   InputMode = "tree"
 )
 
 // Style constants for terminal colors.
@@ -42,6 +43,11 @@ const (
 	colorBarBg          = "236" // dark gray background for status/help bars
 	colorBarFg          = "252" // light foreground for bar text
 	colorBarDim         = "245" // dimmer foreground for help bar action labels
+	colorTreeCursor     = "237" // background for tree cursor (matches colorCursorActive)
+	colorTreeDir        = "245" // dimmer foreground for directories (matches colorBarDim)
+	colorTreeFile       = "252" // brighter foreground for files (matches colorBarFg)
+	colorTreeActive     = "2"   // green for active file indicator (matches colorAdd)
+	colorTreeDim        = "240" // dim text for tree indicators
 )
 
 // Model is the Bubble Tea model for the cr TUI.
@@ -59,6 +65,7 @@ type Model struct {
 	wordDiff       bool
 	pendingKey     string
 	ref            string // CLI ref arg; empty means working tree
+	tree           TreeState
 	config         config.Config
 	renderer       *render.Renderer
 	oldHighlighted []render.HighlightedLine // highlighted lines for old side of active file
@@ -75,6 +82,7 @@ func NewModel(files []diff.DiffFile, paired []diff.PairedLine, width, height int
 		paired:     paired,
 		width:      width,
 		height:     height,
+		tree:       NewTreeState(files),
 		config:     cfg,
 		renderer:   render.NewRenderer(),
 	}
@@ -126,6 +134,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyCtrlC {
 		return m, tea.Quit
+	}
+
+	// Tree mode has its own key handling
+	if m.mode == InputModeTree {
+		return m.handleTreeKey(msg)
 	}
 
 	// Convert tea.KeyMsg to a string for the keys package
@@ -220,6 +233,8 @@ func (m Model) handleAction(action keys.Action) (tea.Model, tea.Cmd) {
 	case keys.ActionCommentAdd, keys.ActionCommentEdit, keys.ActionCommentDelete:
 	case keys.ActionVisualSelect:
 	case keys.ActionToggleTree:
+		m.tree.Open = true
+		m.mode = InputModeTree
 	case keys.ActionFuzzyFiles, keys.ActionSearchDiffs:
 	case keys.ActionSearch, keys.ActionHelp:
 	case keys.ActionToggleWrap:
@@ -321,7 +336,14 @@ func (m Model) View() string {
 		return "No diff content to display.\n"
 	}
 
-	paneWidth := (m.width - 1) / 2
+	// Calculate pane widths based on whether tree is open
+	treeWidth := 0
+	dividers := 1 // center divider between panes
+	if m.tree.Open {
+		treeWidth = TreeWidth(m.width)
+		dividers = 2 // tree divider + center divider
+	}
+	paneWidth := (m.width - treeWidth - dividers) / 2
 	lineNumWidth := 5 // 4 digits + separator
 
 	var rows []string
@@ -349,6 +371,14 @@ func (m Model) View() string {
 		rows = append(rows, row)
 	}
 
+	diffContent := strings.Join(rows, "\n")
+
+	// If tree is open, render tree panel alongside diff
+	if m.tree.Open {
+		treeOutput := RenderTree(&m.tree, treeWidth, vis, m.activeFile)
+		diffContent = lipgloss.JoinHorizontal(lipgloss.Top, treeOutput, "│", diffContent)
+	}
+
 	// Count insertions/deletions for the active file
 	adds, dels := m.countFileChanges()
 
@@ -363,7 +393,7 @@ func (m Model) View() string {
 	statusBar := RenderStatusBar(m.width, m.ref, m.activeFile, len(m.files), filePath, adds, dels, 0, m.activeSide)
 	helpBar := RenderHelpBar(m.width, m.mode)
 
-	return statusBar + "\n" + strings.Join(rows, "\n") + "\n" + helpBar
+	return statusBar + "\n" + diffContent + "\n" + helpBar
 }
 
 // highlightPair returns rendered highlighted content for both sides of a paired line.
@@ -494,6 +524,58 @@ func (m Model) renderSeparator(paneWidth int) string {
 	sep := strings.Repeat("─", totalWidth)
 	style := lipgloss.NewStyle().Foreground(lipgloss.Color(colorSeparator))
 	return style.Render(sep)
+}
+
+// handleTreeKey handles key input when in tree mode.
+func (m Model) handleTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyTab, tea.KeyEsc:
+		m.tree.Open = false
+		m.mode = InputModeNormal
+		return m, nil
+	case tea.KeyEnter:
+		return m.treeOpenSelected()
+	case tea.KeyRunes:
+		switch string(msg.Runes) {
+		case "j":
+			m.tree.CursorDown()
+		case "k":
+			m.tree.CursorUp()
+		case "l":
+			return m.treeOpenSelected()
+		case "h":
+			if entry, ok := m.tree.SelectedEntry(); ok && entry.IsDir {
+				m.tree.ToggleCollapse(entry.FullPath)
+			}
+		case "q":
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+// treeOpenSelected opens the file under the tree cursor and closes the tree.
+func (m Model) treeOpenSelected() (tea.Model, tea.Cmd) {
+	idx := m.tree.SelectedFileIndex()
+	if idx < 0 || idx >= len(m.files) {
+		// On a directory — expand/collapse instead
+		if entry, ok := m.tree.SelectedEntry(); ok && entry.IsDir {
+			m.tree.ToggleCollapse(entry.FullPath)
+		}
+		return m, nil
+	}
+
+	m.activeFile = idx
+	m.cursorRow = 0
+	m.yOffset = 0
+	if m.allPaired != nil && idx < len(m.allPaired) {
+		m.paired = m.allPaired[idx]
+	} else {
+		m.paired = diff.BuildPairedLines(m.files[idx].Hunks)
+	}
+	m.tree.Open = false
+	m.mode = InputModeNormal
+	return m, nil
 }
 
 // countFileChanges counts insertions and deletions in the active file's hunks.

@@ -238,7 +238,7 @@ func TestBuildPairedLines(t *testing.T) {
 				assertPair(t, pairs[0], "line A", "line A") // context
 				assertPair(t, pairs[1], "line B", "line D") // del/add zipped
 				assertPair(t, pairs[2], "line C", "line E") // del/add zipped
-				assertPairLeftNil(t, pairs[3], "line F")           // padding, adds > dels
+				assertPairLeftNil(t, pairs[3], "line F")    // padding, adds > dels
 				assertPair(t, pairs[4], "line G", "line G") // context
 				assertPair(t, pairs[5], "line H", "line I") // second group
 			},

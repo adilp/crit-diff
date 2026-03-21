@@ -645,3 +645,18 @@ func ctrlKeyMsg(key string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
 	}
 }
+
+// Helper to create Tab key message
+func tabKeyMsg() tea.KeyMsg {
+	return tea.KeyMsg{Type: tea.KeyTab}
+}
+
+// Helper to create Enter key message
+func enterKeyMsg() tea.KeyMsg {
+	return tea.KeyMsg{Type: tea.KeyEnter}
+}
+
+// Helper to create Esc key message
+func escKeyMsg() tea.KeyMsg {
+	return tea.KeyMsg{Type: tea.KeyEsc}
+}
