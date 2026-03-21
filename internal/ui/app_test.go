@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/adil/cr/internal/comment"
 	"github.com/adil/cr/internal/diff"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -659,4 +660,204 @@ func enterKeyMsg() tea.KeyMsg {
 // Helper to create Esc key message
 func escKeyMsg() tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyEsc}
+}
+
+// newTestModelWithStore creates a test model wired with a comment store (using temp dir).
+func newTestModelWithStore(t *testing.T, pairs []diff.PairedLine, width, height int) Model {
+	t.Helper()
+	files := []diff.DiffFile{
+		{OldName: "test.go", NewName: "test.go",
+			Hunks: []diff.Hunk{{
+				OldStart: 1, OldCount: 3, NewStart: 1, NewCount: 3,
+				Lines: []diff.DiffLine{
+					{Type: diff.LineContext, OldNum: 1, NewNum: 1, Content: "context line one"},
+					{Type: diff.LineDelete, OldNum: 2, Content: "deleted line"},
+					{Type: diff.LineAdd, NewNum: 2, Content: "added line"},
+					{Type: diff.LineContext, OldNum: 3, NewNum: 3, Content: "context line three"},
+				},
+			}},
+		},
+	}
+	m := NewModel(files, pairs, width, height)
+	m.SetStore(comment.NewStore(t.TempDir()))
+	return m
+}
+
+func TestCommentCreation(t *testing.T) {
+	tests := []struct {
+		name         string
+		setupModel   func(t *testing.T) Model
+		keys         []tea.KeyMsg
+		wantMode     InputMode
+		wantOverlay  bool
+		wantComments int
+	}{
+		{
+			name: "c on code line opens comment overlay",
+			setupModel: func(t *testing.T) Model {
+				return newTestModelWithStore(t, buildTestPairs(), 120, 40)
+			},
+			keys:        []tea.KeyMsg{keyMsg("c")},
+			wantMode:    InputModeComment,
+			wantOverlay: true,
+		},
+		{
+			name: "Esc cancels overlay and returns to normal",
+			setupModel: func(t *testing.T) Model {
+				return newTestModelWithStore(t, buildTestPairs(), 120, 40)
+			},
+			keys:         []tea.KeyMsg{keyMsg("c"), escKeyMsg()},
+			wantMode:     InputModeNormal,
+			wantOverlay:  false,
+			wantComments: 0,
+		},
+		{
+			name: "c on separator row does nothing",
+			setupModel: func(t *testing.T) Model {
+				m := newTestModelWithStore(t, buildMultiHunkPairs(), 120, 40)
+				m.cursorRow = 2 // separator row
+				return m
+			},
+			keys:        []tea.KeyMsg{keyMsg("c")},
+			wantMode:    InputModeNormal,
+			wantOverlay: false,
+		},
+		{
+			name: "c on blank padding row does nothing",
+			setupModel: func(t *testing.T) Model {
+				// Create pairs with a nil side on active pane
+				pairs := []diff.PairedLine{
+					{Left: &diff.DiffLine{Type: diff.LineDelete, OldNum: 1, Content: "deleted"}, Right: nil},
+				}
+				m := newTestModelWithStore(t, pairs, 120, 40)
+				m.activeSide = SideNew // Right is nil
+				return m
+			},
+			keys:        []tea.KeyMsg{keyMsg("c")},
+			wantMode:    InputModeNormal,
+			wantOverlay: false,
+		},
+		{
+			name: "c on line with existing comment does nothing",
+			setupModel: func(t *testing.T) Model {
+				m := newTestModelWithStore(t, buildTestPairs(), 120, 40)
+				// Pre-add a comment on line 1 (the NewNum of cursor row 0)
+				_ = m.store.AddComment("test.go", 1, 0, "context line one", "existing")
+				return m
+			},
+			keys:        []tea.KeyMsg{keyMsg("c")},
+			wantMode:    InputModeNormal,
+			wantOverlay: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := tt.setupModel(t)
+			for _, key := range tt.keys {
+				newModel, _ := m.Update(key)
+				m = newModel.(Model)
+			}
+
+			if m.mode != tt.wantMode {
+				t.Errorf("mode: got %v, want %v", m.mode, tt.wantMode)
+			}
+			if m.overlay.Active != tt.wantOverlay {
+				t.Errorf("overlay.Active: got %v, want %v", m.overlay.Active, tt.wantOverlay)
+			}
+			if tt.wantComments > 0 && m.store != nil {
+				comments := m.store.Comments("test.go")
+				if len(comments) != tt.wantComments {
+					t.Errorf("comments: got %d, want %d", len(comments), tt.wantComments)
+				}
+			}
+		})
+	}
+}
+
+func TestCommentSubmission(t *testing.T) {
+	m := newTestModelWithStore(t, buildTestPairs(), 120, 40)
+	// Press c to open overlay
+	newModel, _ := m.Update(keyMsg("c"))
+	m = newModel.(Model)
+
+	if m.mode != InputModeComment {
+		t.Fatalf("expected InputModeComment, got %v", m.mode)
+	}
+
+	// Type a comment body by sending rune keys to the text input
+	for _, r := range "test comment body" {
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = newModel.(Model)
+	}
+
+	// Press Enter to submit
+	newModel, _ = m.Update(enterKeyMsg())
+	m = newModel.(Model)
+
+	// Should return to normal mode
+	if m.mode != InputModeNormal {
+		t.Errorf("mode after submit: got %v, want InputModeNormal", m.mode)
+	}
+	if m.overlay.Active {
+		t.Error("overlay should be inactive after submit")
+	}
+
+	// Comment should be saved in the store
+	comments := m.store.Comments("test.go")
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(comments))
+	}
+	if comments[0].Body != "test comment body" {
+		t.Errorf("comment body: got %q, want %q", comments[0].Body, "test comment body")
+	}
+	if comments[0].Line != 1 {
+		t.Errorf("comment line: got %d, want 1", comments[0].Line)
+	}
+}
+
+func TestCommentSubmissionEmptyBody(t *testing.T) {
+	m := newTestModelWithStore(t, buildTestPairs(), 120, 40)
+	// Press c to open overlay
+	newModel, _ := m.Update(keyMsg("c"))
+	m = newModel.(Model)
+
+	// Press Enter with empty body — should not create comment
+	newModel, _ = m.Update(enterKeyMsg())
+	m = newModel.(Model)
+
+	if m.mode != InputModeNormal {
+		t.Errorf("mode: got %v, want InputModeNormal", m.mode)
+	}
+	comments := m.store.Comments("test.go")
+	if len(comments) != 0 {
+		t.Errorf("expected 0 comments for empty body, got %d", len(comments))
+	}
+}
+
+func TestCommentHelpBar(t *testing.T) {
+	output := RenderHelpBar(120, InputModeComment)
+	if !strings.Contains(output, "Enter") {
+		t.Error("comment mode help bar should mention Enter")
+	}
+	if !strings.Contains(output, "submit") {
+		t.Error("comment mode help bar should mention submit")
+	}
+	if !strings.Contains(output, "Esc") {
+		t.Error("comment mode help bar should mention Esc")
+	}
+	if !strings.Contains(output, "cancel") {
+		t.Error("comment mode help bar should mention cancel")
+	}
+}
+
+func TestCommentCountInStatusBar(t *testing.T) {
+	m := newTestModelWithStore(t, buildTestPairs(), 120, 40)
+	// Add a comment via the store
+	_ = m.store.AddComment("test.go", 1, 0, "context line one", "a comment")
+
+	output := m.View()
+	if !strings.Contains(output, "C:1") {
+		t.Error("status bar should show C:1 after adding a comment")
+	}
 }

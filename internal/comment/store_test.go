@@ -556,3 +556,35 @@ func TestYAMLFormat(t *testing.T) {
 		t.Error("end_line should be omitted from YAML when 0")
 	}
 }
+
+func TestHasComment(t *testing.T) {
+	tests := []struct {
+		name string
+		line int
+		want bool
+	}{
+		{
+			name: "returns true when comment exists on line",
+			line: 42,
+			want: true,
+		},
+		{
+			name: "returns false when no comment on line",
+			line: 99,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			s := NewStore(dir)
+			_ = s.AddComment("test.go", 42, 0, "snippet", "body")
+
+			got := s.HasComment("test.go", tt.line)
+			if got != tt.want {
+				t.Errorf("HasComment(%d): got %v, want %v", tt.line, got, tt.want)
+			}
+		})
+	}
+}

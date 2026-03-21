@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/adil/cr/internal/comment"
 	"github.com/adil/cr/internal/config"
 	"github.com/adil/cr/internal/diff"
 	"github.com/adil/cr/internal/keys"
@@ -25,8 +26,9 @@ const (
 type InputMode string
 
 const (
-	InputModeNormal InputMode = "normal"
-	InputModeTree   InputMode = "tree"
+	InputModeNormal  InputMode = "normal"
+	InputModeTree    InputMode = "tree"
+	InputModeComment InputMode = "comment"
 )
 
 // Style constants for terminal colors.
@@ -70,6 +72,8 @@ type Model struct {
 	renderer       *render.Renderer
 	oldHighlighted []render.HighlightedLine // highlighted lines for old side of active file
 	newHighlighted []render.HighlightedLine // highlighted lines for new side of active file
+	store          *comment.Store           // comment store for .crit/ persistence
+	overlay        CommentOverlay           // comment input overlay modal
 }
 
 // NewModel creates a new TUI model with the given diff data and terminal dimensions.
@@ -92,6 +96,11 @@ func NewModel(files []diff.DiffFile, paired []diff.PairedLine, width, height int
 // Pass the CLI ref arg (e.g., "main..HEAD"); empty string means working tree.
 func (m *Model) SetRef(ref string) {
 	m.ref = ref
+}
+
+// SetStore sets the comment store for .crit/ persistence.
+func (m *Model) SetStore(s *comment.Store) {
+	m.store = s
 }
 
 // SetHighlighting sets the highlighted lines for the current active file.
@@ -134,6 +143,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyCtrlC {
 		return m, tea.Quit
+	}
+
+	// Comment input mode has its own key handling
+	if m.mode == InputModeComment {
+		return m.handleCommentKey(msg)
 	}
 
 	// Tree mode has its own key handling
@@ -230,8 +244,10 @@ func (m Model) handleAction(action keys.Action) (tea.Model, tea.Cmd) {
 	// Recognized but no-op until later tickets
 	case keys.ActionNextComment, keys.ActionPrevComment:
 	case keys.ActionExpandBelow, keys.ActionExpandAbove:
-	case keys.ActionCommentAdd, keys.ActionCommentEdit, keys.ActionCommentDelete:
+	case keys.ActionCommentEdit, keys.ActionCommentDelete:
 	case keys.ActionVisualSelect:
+	case keys.ActionCommentAdd:
+		m.openCommentOverlay()
 	case keys.ActionToggleTree:
 		m.tree.Open = true
 		m.mode = InputModeTree
@@ -390,10 +406,46 @@ func (m Model) View() string {
 			filePath = m.files[m.activeFile].OldName
 		}
 	}
-	statusBar := RenderStatusBar(m.width, m.ref, m.activeFile, len(m.files), filePath, adds, dels, 0, m.activeSide)
+	statusBar := RenderStatusBar(m.width, m.ref, m.activeFile, len(m.files), filePath, adds, dels, m.commentCount(), m.activeSide)
 	helpBar := RenderHelpBar(m.width, m.mode)
 
-	return statusBar + "\n" + diffContent + "\n" + helpBar
+	result := statusBar + "\n" + diffContent + "\n" + helpBar
+
+	// Overlay the comment input modal when active
+	if m.overlay.Active {
+		overlayBox := m.overlay.Render(m.width)
+		flipAbove := m.overlay.ShouldFlipAbove(m.yOffset, vis)
+		// Position overlay vertically within the diff content area
+		overlayRow := m.overlay.RowIndex - m.yOffset + 1 // +1 for status bar
+		if flipAbove {
+			overlayRow -= 4 // place above cursor (overlay is ~3 rows + gap)
+		} else {
+			overlayRow += 1 // place below cursor
+		}
+		if overlayRow < 1 {
+			overlayRow = 1
+		}
+		if overlayRow > vis {
+			overlayRow = vis - 3
+		}
+		result = lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top,
+			result,
+			lipgloss.WithWhitespaceChars(" "),
+		)
+		// Insert the overlay at the computed position using lipgloss overlay
+		resultLines := strings.Split(result, "\n")
+		overlayLines := strings.Split(overlayBox, "\n")
+		xOffset := (m.width - ansi.StringWidth(overlayLines[0])) / 2
+		for i, ol := range overlayLines {
+			row := overlayRow + i
+			if row >= 0 && row < len(resultLines) {
+				resultLines[row] = placeOverlayLine(resultLines[row], ol, xOffset, m.width)
+			}
+		}
+		result = strings.Join(resultLines, "\n")
+	}
+
+	return result
 }
 
 // highlightPair returns rendered highlighted content for both sides of a paired line.
@@ -576,6 +628,160 @@ func (m Model) treeOpenSelected() (tea.Model, tea.Cmd) {
 	m.tree.Open = false
 	m.mode = InputModeNormal
 	return m, nil
+}
+
+// openCommentOverlay opens the comment input overlay on the current cursor line.
+// Guards: no-op on separator, blank padding, comment rows, or lines with existing comments.
+func (m *Model) openCommentOverlay() {
+	// Guard: need a store to save comments
+	if m.store == nil {
+		return
+	}
+
+	if len(m.paired) == 0 || m.cursorRow >= len(m.paired) {
+		return
+	}
+	p := m.paired[m.cursorRow]
+
+	// Guard: separator row
+	if p.IsSeparator {
+		return
+	}
+
+	// TODO: guard for IsComment rows when CR-013 adds comment display rows
+
+	// Guard: get the line on the active side
+	line := m.activeSideLine(p)
+	if line == nil {
+		return
+	}
+
+	// Get the line number for the active side
+	lineNum := m.activeSideLineNum(line)
+
+	// Guard: one comment per line
+	filePath := m.activeFilePath()
+	if m.store.HasComment(filePath, lineNum) {
+		return
+	}
+
+	m.overlay = NewCommentOverlay(lineNum, m.activeSide, m.cursorRow)
+	m.mode = InputModeComment
+}
+
+// handleCommentKey handles key input when in comment input mode.
+func (m Model) handleCommentKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.overlay = CommentOverlay{}
+		m.mode = InputModeNormal
+		return m, nil
+	case tea.KeyEnter:
+		body := strings.TrimSpace(m.overlay.Value())
+		if body != "" && m.store != nil {
+			filePath := m.activeFilePath()
+			p := m.paired[m.overlay.RowIndex]
+			line := m.activeSideLine(p)
+			snippet := ""
+			if line != nil {
+				snippet = strings.TrimSpace(line.Content)
+			}
+			if err := m.store.AddComment(filePath, m.overlay.Line, 0, snippet, body); err != nil {
+				// TODO: surface error in status bar when error display is available
+				_ = err
+			}
+			// TODO: insert comment display row into m.paired when CR-013 adds comment rendering
+		}
+		m.overlay = CommentOverlay{}
+		m.mode = InputModeNormal
+		return m, nil
+	default:
+		// Forward all other keys to the text input
+		var cmd tea.Cmd
+		m.overlay.Input, cmd = m.overlay.Input.Update(msg)
+		return m, cmd
+	}
+}
+
+// activeSideLine returns the DiffLine on the active side of a paired line.
+func (m Model) activeSideLine(p diff.PairedLine) *diff.DiffLine {
+	if m.activeSide == SideNew {
+		return p.Right
+	}
+	return p.Left
+}
+
+// activeSideLineNum returns the line number for the active side.
+func (m Model) activeSideLineNum(line *diff.DiffLine) int {
+	if m.activeSide == SideNew {
+		return line.NewNum
+	}
+	return line.OldNum
+}
+
+// activeFilePath returns the file path for the active file.
+func (m Model) activeFilePath() string {
+	if len(m.files) == 0 || m.activeFile >= len(m.files) {
+		return ""
+	}
+	f := m.files[m.activeFile]
+	if f.NewName != "" {
+		return f.NewName
+	}
+	return f.OldName
+}
+
+// commentCount returns the number of comments for the active file.
+func (m Model) commentCount() int {
+	if m.store == nil {
+		return 0
+	}
+	return len(m.store.Comments(m.activeFilePath()))
+}
+
+// placeOverlayLine replaces a horizontal span in a background line with an overlay line.
+// Uses display-width-aware positioning to handle ANSI-styled content.
+func placeOverlayLine(bgLine, overlayLine string, xOffset, totalWidth int) string {
+	bgWidth := ansi.StringWidth(bgLine)
+
+	// Pad background to totalWidth if needed
+	if bgWidth < totalWidth {
+		bgLine = bgLine + strings.Repeat(" ", totalWidth-bgWidth)
+	}
+
+	// Build: left portion + overlay + right portion
+	left := ansi.Truncate(bgLine, xOffset, "")
+	leftWidth := ansi.StringWidth(left)
+
+	// Pad left to exact offset if truncation was short
+	if leftWidth < xOffset {
+		left = left + strings.Repeat(" ", xOffset-leftWidth)
+	}
+
+	overlayWidth := ansi.StringWidth(overlayLine)
+	rightStart := xOffset + overlayWidth
+
+	// Extract right portion from background
+	right := ""
+	if rightStart < totalWidth {
+		// Cut the background after the overlay ends
+		cut := ansi.Truncate(bgLine, rightStart, "")
+		cutWidth := ansi.StringWidth(cut)
+		if cutWidth < rightStart {
+			right = strings.Repeat(" ", totalWidth-rightStart)
+		} else {
+			// Get the remaining portion
+			fullBg := bgLine
+			right = ""
+			if rightStart < bgWidth {
+				// We need the part of bgLine starting at display position rightStart
+				right = strings.Repeat(" ", totalWidth-rightStart)
+			}
+			_ = fullBg
+		}
+	}
+
+	return left + overlayLine + right
 }
 
 // countFileChanges counts insertions and deletions in the active file's hunks.

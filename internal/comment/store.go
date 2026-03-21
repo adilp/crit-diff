@@ -49,6 +49,16 @@ func (s *Store) Comments(file string) []Comment {
 	return []Comment{}
 }
 
+// HasComment returns true if a comment already exists on the given line for the file.
+func (s *Store) HasComment(file string, line int) bool {
+	for _, c := range s.comments[file] {
+		if c.Line == line {
+			return true
+		}
+	}
+	return false
+}
+
 // AddComment creates a new comment and persists it to disk.
 func (s *Store) AddComment(file string, line, endLine int, snippet, body string) error {
 	c := Comment{
