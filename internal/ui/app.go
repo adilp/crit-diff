@@ -9,6 +9,7 @@ import (
 	"github.com/adil/cr/internal/diff"
 	"github.com/adil/cr/internal/keys"
 	"github.com/adil/cr/internal/render"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -30,6 +31,7 @@ const (
 	InputModeTree    InputMode = "tree"
 	InputModeComment InputMode = "comment"
 	InputModeVisual  InputMode = "visual"
+	InputModeSearch  InputMode = "search"
 )
 
 // Style constants for terminal colors.
@@ -53,6 +55,7 @@ const (
 	colorTreeDim        = "240" // dim text for tree indicators
 	colorCommentBg      = "235" // dimmed background for comment display rows
 	colorCommentFg      = "245" // muted foreground for comment body text
+	colorSearchMatch    = "226" // bright yellow background for search match highlighting
 )
 
 // Model is the Bubble Tea model for the cr TUI.
@@ -78,6 +81,7 @@ type Model struct {
 	store          *comment.Store           // comment store for .crit/ persistence
 	overlay        CommentOverlay           // comment input overlay modal
 	visualStart    int                      // row index where V was pressed (visual mode anchor)
+	search         SearchState              // in-file search state
 }
 
 // NewModel creates a new TUI model with the given diff data and terminal dimensions.
@@ -149,6 +153,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
+	// Search input mode has its own key handling
+	if m.mode == InputModeSearch {
+		return m.handleSearchKey(msg)
+	}
+
 	// Comment input mode has its own key handling
 	if m.mode == InputModeComment {
 		return m.handleCommentKey(msg)
@@ -162,6 +171,24 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Tree mode has its own key handling
 	if m.mode == InputModeTree {
 		return m.handleTreeKey(msg)
+	}
+
+	// Handle search-related keys in normal mode (only when no pending prefix key)
+	if m.search.Active && m.pendingKey == "" {
+		if msg.Type == tea.KeyEsc {
+			m.search = SearchState{}
+			return m, nil
+		}
+		if msg.Type == tea.KeyRunes {
+			switch string(msg.Runes) {
+			case "n":
+				m.searchNext()
+				return m, nil
+			case "N":
+				m.searchPrev()
+				return m, nil
+			}
+		}
 	}
 
 	// Convert tea.KeyMsg to a string for the keys package
@@ -268,7 +295,9 @@ func (m Model) handleAction(action keys.Action) (tea.Model, tea.Cmd) {
 		m.tree.Open = true
 		m.mode = InputModeTree
 	case keys.ActionFuzzyFiles, keys.ActionSearchDiffs:
-	case keys.ActionSearch, keys.ActionHelp:
+	case keys.ActionSearch:
+		m.openSearch()
+	case keys.ActionHelp:
 	case keys.ActionToggleWrap:
 	case keys.ActionDiscard, keys.ActionNone:
 	}
@@ -320,6 +349,7 @@ func (m *Model) switchToNextFile() {
 	} else {
 		m.paired = diff.BuildPairedLines(m.files[m.activeFile].Hunks)
 	}
+	m.recomputeSearch()
 }
 
 // switchToPrevFile switches to the previous file in the file list.
@@ -335,6 +365,17 @@ func (m *Model) switchToPrevFile() {
 	} else {
 		m.paired = diff.BuildPairedLines(m.files[m.activeFile].Hunks)
 	}
+	m.recomputeSearch()
+}
+
+// recomputeSearch updates search matches for the current paired lines.
+// Called after file switches to keep search state consistent.
+func (m *Model) recomputeSearch() {
+	if !m.search.Active || m.search.Query == "" {
+		return
+	}
+	m.search.Matches = FindMatches(m.paired, m.search.Query)
+	m.search.Current = 0
 }
 
 // clampCursor ensures cursor stays within valid range.
@@ -438,7 +479,15 @@ func (m Model) View() string {
 		}
 	}
 	statusBar := RenderStatusBar(m.width, m.ref, m.activeFile, len(m.files), filePath, adds, dels, m.commentCount(), m.activeSide)
-	helpBar := RenderHelpBar(m.width, m.mode)
+
+	var helpBar string
+	if m.mode == InputModeSearch {
+		helpBar = m.renderSearchPrompt()
+	} else if m.search.Active {
+		helpBar = m.renderSearchInfo()
+	} else {
+		helpBar = RenderHelpBar(m.width, m.mode)
+	}
 
 	result := statusBar + "\n" + diffContent + "\n" + helpBar
 
@@ -494,6 +543,13 @@ func (m Model) highlightPair(p diff.PairedLine) (string, string) {
 				oldMask, _ := render.ComputeWordDiff(p.Left.Content, p.Right.Content)
 				hl = render.ApplyEmphasis(hl, oldMask, colorEmphasisDelete)
 			}
+			// Apply search highlight (active search or live preview while typing)
+			if m.search.Query != "" {
+				searchMask := BuildSearchMask(p.Left.Content, m.search.Query)
+				if searchMask != nil {
+					hl = render.ApplyEmphasis(hl, searchMask, colorSearchMatch)
+				}
+			}
 			leftHL = render.RenderLine(hl)
 		}
 	}
@@ -506,6 +562,13 @@ func (m Model) highlightPair(p diff.PairedLine) (string, string) {
 			if m.wordDiff && p.Right.Type == diff.LineAdd && p.Left != nil && p.Left.Type == diff.LineDelete {
 				_, newMask := render.ComputeWordDiff(p.Left.Content, p.Right.Content)
 				hl = render.ApplyEmphasis(hl, newMask, colorEmphasisAdd)
+			}
+			// Apply search highlight (active search or live preview while typing)
+			if m.search.Query != "" {
+				searchMask := BuildSearchMask(p.Right.Content, m.search.Query)
+				if searchMask != nil {
+					hl = render.ApplyEmphasis(hl, searchMask, colorSearchMatch)
+				}
 			}
 			rightHL = render.RenderLine(hl)
 		}
@@ -684,6 +747,7 @@ func (m Model) treeOpenSelected() (tea.Model, tea.Cmd) {
 	}
 	m.tree.Open = false
 	m.mode = InputModeNormal
+	m.recomputeSearch()
 	return m, nil
 }
 
@@ -1072,6 +1136,122 @@ func (m *Model) openRangeCommentOverlay() {
 	m.overlay.EndLine = endLine
 	m.overlay.rangeSnippet = snippet
 	m.mode = InputModeComment
+}
+
+// renderSearchPrompt renders the search input prompt (replaces help bar during search input).
+func (m Model) renderSearchPrompt() string {
+	prompt := "/" + m.search.Input.View()
+
+	contentWidth := ansi.StringWidth(prompt)
+	padding := m.width - contentWidth
+	if padding < 0 {
+		padding = 0
+	}
+	prompt = prompt + strings.Repeat(" ", padding)
+
+	style := lipgloss.NewStyle().
+		Background(lipgloss.Color(colorBarBg))
+
+	return style.Render(prompt)
+}
+
+// renderSearchInfo renders the search results bar (replaces help bar when search is active).
+func (m Model) renderSearchInfo() string {
+	var info string
+	if len(m.search.Matches) == 0 {
+		info = fmt.Sprintf(" /%s  no matches", m.search.Query)
+	} else {
+		info = fmt.Sprintf(" /%s  [%d/%d]", m.search.Query, m.search.Current+1, len(m.search.Matches))
+	}
+
+	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorBarFg))
+	actionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorBarDim))
+	hints := keyStyle.Render("[n]") + " " + actionStyle.Render("next") + "  " +
+		keyStyle.Render("[N]") + " " + actionStyle.Render("prev") + "  " +
+		keyStyle.Render("[Esc]") + " " + actionStyle.Render("clear")
+
+	content := info + "  " + hints
+
+	contentWidth := ansi.StringWidth(content)
+	padding := m.width - contentWidth
+	if padding < 0 {
+		padding = 0
+	}
+	content = content + strings.Repeat(" ", padding)
+
+	style := lipgloss.NewStyle().
+		Background(lipgloss.Color(colorBarBg))
+
+	return style.Render(content)
+}
+
+// openSearch enters search input mode.
+func (m *Model) openSearch() {
+	ti := textinput.New()
+	ti.Focus()
+	ti.CharLimit = 0
+	ti.Placeholder = "search..."
+	m.search = SearchState{
+		Input: ti,
+	}
+	m.mode = InputModeSearch
+}
+
+// handleSearchKey handles key input when in search input mode.
+func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.search = SearchState{}
+		m.mode = InputModeNormal
+		return m, nil
+	case tea.KeyEnter:
+		query := m.search.Input.Value()
+		matches := FindMatches(m.paired, query)
+		m.search.Active = true
+		m.search.Query = query
+		m.search.Matches = matches
+		m.search.Current = 0
+		m.mode = InputModeNormal
+
+		// Jump to first match after current cursor
+		if len(matches) > 0 {
+			idx := m.search.FirstMatchAfter(m.cursorRow)
+			m.search.Current = idx
+			m.cursorRow = matches[idx].Row
+			m.scrollToCursor()
+		}
+
+		return m, nil
+	default:
+		var cmd tea.Cmd
+		m.search.Input, cmd = m.search.Input.Update(msg)
+		// Update matches in real-time as user types
+		query := m.search.Input.Value()
+		m.search.Query = query
+		m.search.Matches = FindMatches(m.paired, query)
+		m.search.Current = 0
+		return m, cmd
+	}
+}
+
+// searchNext jumps to the next search match.
+func (m *Model) searchNext() {
+	if len(m.search.Matches) == 0 {
+		return
+	}
+	m.search.Next()
+	m.cursorRow = m.search.Matches[m.search.Current].Row
+	m.scrollToCursor()
+}
+
+// searchPrev jumps to the previous search match.
+func (m *Model) searchPrev() {
+	if len(m.search.Matches) == 0 {
+		return
+	}
+	m.search.Prev()
+	m.cursorRow = m.search.Matches[m.search.Current].Row
+	m.scrollToCursor()
 }
 
 // countFileChanges counts insertions and deletions in the active file's hunks.

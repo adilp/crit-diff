@@ -44,6 +44,11 @@ func RenderHelpBar(width int, mode InputMode) string {
 			{"c", "comment"},
 			{"Esc", "cancel"},
 		}
+	case InputModeSearch:
+		hints = []hint{
+			{"Enter", "search"},
+			{"Esc", "cancel"},
+		}
 	default:
 		hints = []hint{
 			{"Esc", "back"},
