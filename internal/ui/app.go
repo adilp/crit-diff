@@ -915,7 +915,18 @@ func (m *Model) editComment() {
 		return
 	}
 
-	m.overlay = NewCommentOverlay(0, m.activeSide, m.cursorRow)
+	// Look up the comment's line number from the store
+	commentLine := 0
+	if m.store != nil {
+		for _, c := range m.store.Comments(m.activeFilePath()) {
+			if c.ID == p.CommentID {
+				commentLine = c.Line
+				break
+			}
+		}
+	}
+
+	m.overlay = NewCommentOverlay(commentLine, m.activeSide, m.cursorRow)
 	m.overlay.Input.SetValue(p.CommentBody)
 	m.overlay.editingID = p.CommentID
 	m.mode = InputModeComment

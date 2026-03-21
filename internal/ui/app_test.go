@@ -964,6 +964,21 @@ func TestCommentNavigationNextPrev(t *testing.T) {
 		}
 	})
 
+	t.Run("[m with no previous comments does nothing", func(t *testing.T) {
+		m := newTestModelWithComments(t, 120, 40)
+		// Cursor at row 0, before the comment row
+		prevRow := m.cursorRow
+
+		newModel, _ := m.Update(keyMsg("["))
+		m = newModel.(Model)
+		newModel, _ = m.Update(keyMsg("m"))
+		m = newModel.(Model)
+
+		if m.cursorRow != prevRow {
+			t.Errorf("cursorRow should stay at %d, got %d", prevRow, m.cursorRow)
+		}
+	})
+
 	t.Run("]m with no more comments does nothing", func(t *testing.T) {
 		m := newTestModelWithComments(t, 120, 40)
 		// Move to comment row first
