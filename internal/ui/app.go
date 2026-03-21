@@ -1020,8 +1020,6 @@ func (m Model) handleVisualKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "q":
 			return m, tea.Quit
 		}
-	case tea.KeyCtrlC:
-		return m, tea.Quit
 	}
 	return m, nil
 }
@@ -1054,12 +1052,10 @@ func (m *Model) openRangeCommentOverlay() {
 		lineNum := m.activeSideLineNum(line)
 		if startLine == 0 || lineNum < startLine {
 			startLine = lineNum
+			snippet = strings.TrimSpace(line.Content)
 		}
 		if lineNum > endLine {
 			endLine = lineNum
-		}
-		if snippet == "" {
-			snippet = strings.TrimSpace(line.Content)
 		}
 	}
 
