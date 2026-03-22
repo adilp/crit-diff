@@ -32,6 +32,7 @@ const (
 	InputModeComment InputMode = "comment"
 	InputModeVisual  InputMode = "visual"
 	InputModeSearch  InputMode = "search"
+	InputModeFuzzy   InputMode = "fuzzy"
 )
 
 // Style constants for terminal colors.
@@ -82,6 +83,7 @@ type Model struct {
 	overlay        CommentOverlay           // comment input overlay modal
 	visualStart    int                      // row index where V was pressed (visual mode anchor)
 	search         SearchState              // in-file search state
+	fuzzy          FuzzyState               // built-in fuzzy overlay state
 }
 
 // NewModel creates a new TUI model with the given diff data and terminal dimensions.
@@ -151,6 +153,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyCtrlC {
 		return m, tea.Quit
+	}
+
+	// Fuzzy mode has its own key handling
+	if m.mode == InputModeFuzzy {
+		return m.handleFuzzyKey(msg)
 	}
 
 	// Search input mode has its own key handling
@@ -294,7 +301,10 @@ func (m Model) handleAction(action keys.Action) (tea.Model, tea.Cmd) {
 	case keys.ActionToggleTree:
 		m.tree.Open = true
 		m.mode = InputModeTree
-	case keys.ActionFuzzyFiles, keys.ActionSearchDiffs:
+	case keys.ActionFuzzyFiles:
+		m.openFuzzyFiles()
+	case keys.ActionSearchDiffs:
+		m.openFuzzyContent()
 	case keys.ActionSearch:
 		m.openSearch()
 	case keys.ActionHelp:
@@ -525,6 +535,11 @@ func (m Model) View() string {
 		result = strings.Join(resultLines, "\n")
 	}
 
+	// Render fuzzy overlay when active
+	if m.mode == InputModeFuzzy && m.fuzzy.Active {
+		result = RenderFuzzyOverlay(&m.fuzzy, m.width, m.height)
+	}
+
 	return result
 }
 
@@ -696,6 +711,115 @@ func (m Model) renderSeparator(paneWidth int) string {
 	sep := strings.Repeat("─", totalWidth)
 	style := lipgloss.NewStyle().Foreground(lipgloss.Color(colorSeparator))
 	return style.Render(sep)
+}
+
+// openFuzzyFiles opens the built-in fuzzy overlay for file search.
+func (m *Model) openFuzzyFiles() {
+	items := BuildFileList(m.files)
+	m.fuzzy = NewFuzzyState(FuzzyModeFiles, items)
+	m.mode = InputModeFuzzy
+}
+
+// openFuzzyContent opens the built-in fuzzy overlay for content search.
+func (m *Model) openFuzzyContent() {
+	contentItems := BuildContentList(m.files)
+	items := make([]string, len(contentItems))
+	for i, ci := range contentItems {
+		items[i] = ci.Display
+	}
+	m.fuzzy = NewFuzzyState(FuzzyModeContent, items)
+	m.fuzzy.ContentItems = contentItems
+	m.mode = InputModeFuzzy
+}
+
+// handleFuzzyKey handles key input when in fuzzy overlay mode.
+// Navigation uses arrow keys and Ctrl-j/Ctrl-k only; all other keys go to the text input.
+func (m Model) handleFuzzyKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.fuzzy = FuzzyState{}
+		m.mode = InputModeNormal
+		return m, nil
+	case tea.KeyEnter:
+		return m.fuzzySelect()
+	case tea.KeyUp, tea.KeyCtrlK:
+		m.fuzzy.CursorUp()
+		m.fuzzy.EnsureCursorVisible(m.fuzzyMaxItems())
+		return m, nil
+	case tea.KeyDown, tea.KeyCtrlJ:
+		m.fuzzy.CursorDown()
+		m.fuzzy.EnsureCursorVisible(m.fuzzyMaxItems())
+		return m, nil
+	default:
+		// Forward all other keys to text input for filtering
+		m.fuzzy.Input, _ = m.fuzzy.Input.Update(msg)
+		m.fuzzy.UpdateFilter(m.fuzzy.Input.Value())
+		return m, nil
+	}
+}
+
+// fuzzyMaxItems returns the number of visible items in the fuzzy overlay.
+func (m Model) fuzzyMaxItems() int {
+	maxItems := m.height - 4
+	if maxItems < 1 {
+		maxItems = 1
+	}
+	return maxItems
+}
+
+// fuzzySelect handles Enter in fuzzy mode — navigates to the selected item.
+func (m Model) fuzzySelect() (tea.Model, tea.Cmd) {
+	if m.fuzzy.Mode == FuzzyModeFiles {
+		item, ok := m.fuzzy.SelectedItem()
+		if !ok {
+			m.fuzzy = FuzzyState{}
+			m.mode = InputModeNormal
+			return m, nil
+		}
+		idx := FindFileIndex(m.files, item)
+		if idx >= 0 {
+			m.activeFile = idx
+			m.cursorRow = 0
+			m.yOffset = 0
+			if m.allPaired != nil && idx < len(m.allPaired) {
+				m.paired = m.allPaired[idx]
+			} else {
+				m.paired = diff.BuildPairedLines(m.files[idx].Hunks)
+			}
+			m.recomputeSearch()
+		}
+	} else {
+		ci, ok := m.fuzzy.SelectedContentItem()
+		if !ok {
+			m.fuzzy = FuzzyState{}
+			m.mode = InputModeNormal
+			return m, nil
+		}
+		idx := ci.FileIndex
+		if idx >= 0 && idx < len(m.files) {
+			m.activeFile = idx
+			if m.allPaired != nil && idx < len(m.allPaired) {
+				m.paired = m.allPaired[idx]
+			} else {
+				m.paired = diff.BuildPairedLines(m.files[idx].Hunks)
+			}
+			// Determine side from line type: adds are on new side, deletes on old side
+			side := m.activeSide
+			switch ci.LineType {
+			case diff.LineAdd:
+				side = SideNew
+			case diff.LineDelete:
+				side = SideOld
+			}
+			m.cursorRow = FindRowForLine(m.paired, ci.LineNum, side)
+			m.yOffset = 0
+			m.scrollToCursor()
+			m.recomputeSearch()
+		}
+	}
+	m.fuzzy = FuzzyState{}
+	m.mode = InputModeNormal
+	return m, nil
 }
 
 // handleTreeKey handles key input when in tree mode.

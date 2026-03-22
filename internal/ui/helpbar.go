@@ -49,6 +49,12 @@ func RenderHelpBar(width int, mode InputMode) string {
 			{"Enter", "search"},
 			{"Esc", "cancel"},
 		}
+	case InputModeFuzzy:
+		hints = []hint{
+			{"↑/↓", "navigate"},
+			{"Enter", "select"},
+			{"Esc", "cancel"},
+		}
 	default:
 		hints = []hint{
 			{"Esc", "back"},
