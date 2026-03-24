@@ -217,6 +217,7 @@ func main() {
 		}
 
 		m.SetHighlighting(filename, oldContent, newContent)
+		m.SetFileContent(oldContent, newContent)
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())

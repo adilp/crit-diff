@@ -61,29 +61,32 @@ const (
 
 // Model is the Bubble Tea model for the cr TUI.
 type Model struct {
-	mode           InputMode
-	files          []diff.DiffFile
-	activeFile     int
-	activeSide     Side
-	cursorRow      int
-	paired         []diff.PairedLine
-	allPaired      [][]diff.PairedLine // paired lines for each file
-	width          int
-	height         int
-	yOffset        int
-	wordDiff       bool
-	pendingKey     string
-	ref            string // CLI ref arg; empty means working tree
-	tree           TreeState
-	config         config.Config
-	renderer       *render.Renderer
-	oldHighlighted []render.HighlightedLine // highlighted lines for old side of active file
-	newHighlighted []render.HighlightedLine // highlighted lines for new side of active file
-	store          *comment.Store           // comment store for .crit/ persistence
-	overlay        CommentOverlay           // comment input overlay modal
-	visualStart    int                      // row index where V was pressed (visual mode anchor)
-	search         SearchState              // in-file search state
-	fuzzy          FuzzyState               // built-in fuzzy overlay state
+	mode            InputMode
+	files           []diff.DiffFile
+	activeFile      int
+	activeSide      Side
+	cursorRow       int
+	paired          []diff.PairedLine
+	allPaired       [][]diff.PairedLine // paired lines for each file
+	width           int
+	height          int
+	yOffset         int
+	wordDiff        bool
+	pendingKey      string
+	ref             string // CLI ref arg; empty means working tree
+	tree            TreeState
+	config          config.Config
+	renderer        *render.Renderer
+	oldHighlighted  []render.HighlightedLine // highlighted lines for old side of active file
+	newHighlighted  []render.HighlightedLine // highlighted lines for new side of active file
+	store           *comment.Store           // comment store for .crit/ persistence
+	overlay         CommentOverlay           // comment input overlay modal
+	visualStart     int                      // row index where V was pressed (visual mode anchor)
+	search          SearchState              // in-file search state
+	fuzzy           FuzzyState               // built-in fuzzy overlay state
+	separatorStates []SeparatorState         // expansion state per separator
+	oldFileLines    []string                 // full old file content (0-indexed line strings)
+	newFileLines    []string                 // full new file content (0-indexed line strings)
 }
 
 // NewModel creates a new TUI model with the given diff data and terminal dimensions.
@@ -119,6 +122,24 @@ func (m *Model) SetStore(s *comment.Store) {
 func (m *Model) SetHighlighting(filename, oldContent, newContent string) {
 	m.oldHighlighted = m.renderer.HighlightFileWithKey("old:"+filename, filename, oldContent)
 	m.newHighlighted = m.renderer.HighlightFileWithKey("new:"+filename, filename, newContent)
+}
+
+// SetFileContent stores the full file content for context expansion and initializes
+// separator states for the active file's hunks.
+func (m *Model) SetFileContent(oldContent, newContent string) {
+	if oldContent != "" {
+		m.oldFileLines = strings.Split(oldContent, "\n")
+	} else {
+		m.oldFileLines = nil
+	}
+	if newContent != "" {
+		m.newFileLines = strings.Split(newContent, "\n")
+	} else {
+		m.newFileLines = nil
+	}
+	if len(m.files) > 0 && m.activeFile < len(m.files) {
+		m.separatorStates = BuildSeparatorStates(m.files[m.activeFile].Hunks)
+	}
 }
 
 // Init implements tea.Model.
@@ -292,8 +313,10 @@ func (m Model) handleAction(action keys.Action) (tea.Model, tea.Cmd) {
 		m.editComment()
 	case keys.ActionCommentDelete:
 		m.deleteComment()
-	// Recognized but no-op until later tickets
-	case keys.ActionExpandBelow, keys.ActionExpandAbove:
+	case keys.ActionExpandBelow:
+		m.expandContext("down")
+	case keys.ActionExpandAbove:
+		m.expandContext("up")
 	case keys.ActionVisualSelect:
 		m.enterVisualMode()
 	case keys.ActionCommentAdd:
@@ -346,6 +369,81 @@ func (m *Model) jumpToPrevHunk() {
 	}
 }
 
+// expandContext expands context lines around a separator.
+// direction is "down" (]e) or "up" ([e).
+func (m *Model) expandContext(direction string) {
+	if len(m.separatorStates) == 0 || len(m.files) == 0 || m.activeFile >= len(m.files) {
+		return
+	}
+
+	// Find the nearest separator in paired lines
+	var sepRow int
+	if direction == "down" {
+		sepRow = FindNearestSeparatorBelow(m.paired, m.cursorRow)
+	} else {
+		sepRow = FindNearestSeparatorAbove(m.paired, m.cursorRow)
+	}
+	if sepRow < 0 {
+		return
+	}
+
+	// Find which separator state corresponds to this separator row
+	sepP := m.paired[sepRow]
+	var state *SeparatorState
+	for i := range m.separatorStates {
+		if m.separatorStates[i].HunkIndex == sepP.HunkIndex {
+			state = &m.separatorStates[i]
+			break
+		}
+	}
+	if state == nil || IsSeparatorFullyExpanded(*state) {
+		return
+	}
+
+	hunks := m.files[m.activeFile].Hunks
+	if state.HunkIndex < 1 || state.HunkIndex >= len(hunks) {
+		return
+	}
+	hunkAbove := hunks[state.HunkIndex-1]
+	hunkBelow := hunks[state.HunkIndex]
+
+	newLines := ExpandedContextLines(
+		state, hunkAbove, hunkBelow,
+		m.oldFileLines, m.newFileLines,
+		direction,
+	)
+	if len(newLines) == 0 {
+		return
+	}
+
+	// Insert the expanded lines into paired lines at the separator position
+	var result []diff.PairedLine
+	if IsSeparatorFullyExpanded(*state) {
+		// Replace separator with expanded lines
+		result = append(result, m.paired[:sepRow]...)
+		result = append(result, newLines...)
+		result = append(result, m.paired[sepRow+1:]...)
+	} else if direction == "down" {
+		// Insert expanded lines after separator
+		result = append(result, m.paired[:sepRow]...)
+		result = append(result, newLines...)
+		result = append(result, m.paired[sepRow:]...)
+	} else {
+		// Insert expanded lines before separator
+		result = append(result, m.paired[:sepRow]...)
+		result = append(result, m.paired[sepRow])
+		result = append(result, newLines...)
+		result = append(result, m.paired[sepRow+1:]...)
+	}
+
+	m.paired = result
+	if m.allPaired != nil && m.activeFile < len(m.allPaired) {
+		m.allPaired[m.activeFile] = result
+	}
+	m.clampCursor()
+	m.scrollToCursor()
+}
+
 // switchToNextFile switches to the next file in the file list.
 func (m *Model) switchToNextFile() {
 	if m.activeFile >= len(m.files)-1 {
@@ -359,7 +457,7 @@ func (m *Model) switchToNextFile() {
 	} else {
 		m.paired = diff.BuildPairedLines(m.files[m.activeFile].Hunks)
 	}
-	m.recomputeSearch()
+	m.resetFileState()
 }
 
 // switchToPrevFile switches to the previous file in the file list.
@@ -375,6 +473,18 @@ func (m *Model) switchToPrevFile() {
 	} else {
 		m.paired = diff.BuildPairedLines(m.files[m.activeFile].Hunks)
 	}
+	m.resetFileState()
+}
+
+// resetFileState resets per-file state when switching to a new file.
+// Reinitializes separator states and recomputes search matches.
+func (m *Model) resetFileState() {
+	if m.activeFile < len(m.files) {
+		m.separatorStates = BuildSeparatorStates(m.files[m.activeFile].Hunks)
+	}
+	// Clear file content lines — they need to be re-fetched for the new file
+	m.oldFileLines = nil
+	m.newFileLines = nil
 	m.recomputeSearch()
 }
 
@@ -708,7 +818,16 @@ func (m Model) renderCommentRow(p diff.PairedLine, paneWidth int, isCursor bool)
 // renderSeparator renders a hunk separator row.
 func (m Model) renderSeparator(paneWidth int) string {
 	totalWidth := paneWidth*2 + 1
-	sep := strings.Repeat("─", totalWidth)
+	hint := " expand context (]e / [e) "
+	hintWidth := ansi.StringWidth(hint)
+	if totalWidth < hintWidth+4 {
+		// Too narrow for hint, just dashes
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color(colorSeparator))
+		return style.Render(strings.Repeat("─", totalWidth))
+	}
+	leftDashes := (totalWidth - hintWidth) / 2
+	rightDashes := totalWidth - hintWidth - leftDashes
+	sep := strings.Repeat("─", leftDashes) + hint + strings.Repeat("─", rightDashes)
 	style := lipgloss.NewStyle().Foreground(lipgloss.Color(colorSeparator))
 	return style.Render(sep)
 }
