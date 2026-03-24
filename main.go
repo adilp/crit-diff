@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/adil/cr/internal/comment"
 	"github.com/adil/cr/internal/diff"
 	"github.com/adil/cr/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
@@ -158,6 +159,33 @@ func main() {
 	if len(files) == 0 {
 		fmt.Println("no changes")
 		os.Exit(0)
+	}
+
+	// Write session manifest
+	var diffBase string
+	switch args.Mode {
+	case ModeWorkingTree:
+		diffBase = "HEAD"
+	case ModeSingleRef:
+		diffBase = args.RefFrom
+	case ModeRefRange:
+		diffBase = args.RefFrom + ".." + args.RefTo
+	}
+	var filePaths []string
+	for _, f := range files {
+		name := f.NewName
+		if name == "" {
+			name = f.OldName
+		}
+		filePaths = append(filePaths, name)
+	}
+	repoRoot, err := diff.GetRepoRoot(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if err := comment.WriteSessionManifest(repoRoot, diffBase, filePaths); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not write session manifest: %v\n", err)
 	}
 
 	// Build paired lines for the first file

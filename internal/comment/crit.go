@@ -71,6 +71,43 @@ func writeReviewFile(path string, state *ReviewState) error {
 	return nil
 }
 
+// CodeReviewSession is the session manifest written to .crit/code-review.yaml on launch.
+type CodeReviewSession struct {
+	Files     []string  `yaml:"files"`
+	DiffBase  string    `yaml:"diff_base"`
+	CreatedAt time.Time `yaml:"created_at"`
+}
+
+// WriteSessionManifest writes the session manifest to .crit/code-review.yaml.
+func WriteSessionManifest(repoRoot, diffBase string, files []string) error {
+	if err := ensureCritDir(repoRoot); err != nil {
+		return fmt.Errorf("write session manifest: %w", err)
+	}
+
+	session := CodeReviewSession{
+		Files:     files,
+		DiffBase:  diffBase,
+		CreatedAt: time.Now().UTC(),
+	}
+
+	data, err := yaml.Marshal(&session)
+	if err != nil {
+		return fmt.Errorf("marshal session manifest: %w", err)
+	}
+
+	path := filepath.Join(repoRoot, ".crit", "code-review.yaml")
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
+		return fmt.Errorf("write session manifest temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("rename session manifest: %w", err)
+	}
+
+	return nil
+}
+
 // readReviewFile reads a ReviewState from disk. Returns nil if the file does not exist.
 func readReviewFile(path string) (*ReviewState, error) {
 	data, err := os.ReadFile(path)
