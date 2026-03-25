@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/adil/cr/internal/comment"
@@ -525,6 +526,14 @@ func (m *Model) scrollToCursor() {
 
 // View implements tea.Model.
 func (m Model) View() string {
+	// Check for special file types that show centered messages instead of diff
+	if len(m.files) > 0 && m.activeFile < len(m.files) {
+		f := m.files[m.activeFile]
+		if msg := m.specialFileMessage(f); msg != "" {
+			return m.renderSpecialFileView(f, msg)
+		}
+	}
+
 	if len(m.paired) == 0 {
 		return "No diff content to display.\n"
 	}
@@ -592,13 +601,14 @@ func (m Model) View() string {
 
 	// Status bar (top) and help bar (bottom)
 	filePath := ""
+	var oldMode, newMode os.FileMode
 	if len(m.files) > 0 && m.activeFile < len(m.files) {
-		filePath = m.files[m.activeFile].NewName
-		if filePath == "" {
-			filePath = m.files[m.activeFile].OldName
-		}
+		f := m.files[m.activeFile]
+		filePath = fileDisplayPath(f)
+		oldMode = f.OldMode
+		newMode = f.NewMode
 	}
-	statusBar := RenderStatusBar(m.width, m.ref, m.activeFile, len(m.files), filePath, adds, dels, m.commentCount(), m.activeSide)
+	statusBar := RenderStatusBarWithMode(m.width, m.ref, m.activeFile, len(m.files), filePath, adds, dels, m.commentCount(), m.activeSide, oldMode, newMode)
 
 	var helpBar string
 	if m.mode == InputModeSearch {
@@ -830,6 +840,84 @@ func (m Model) renderSeparator(paneWidth int) string {
 	sep := strings.Repeat("─", leftDashes) + hint + strings.Repeat("─", rightDashes)
 	style := lipgloss.NewStyle().Foreground(lipgloss.Color(colorSeparator))
 	return style.Render(sep)
+}
+
+// fileDisplayPath returns the display path for the status bar.
+// Renamed files show "old → new", otherwise just the file path.
+func fileDisplayPath(f diff.DiffFile) string {
+	if f.IsRename {
+		return f.OldName + " → " + f.NewName
+	}
+	path := f.NewName
+	if path == "" {
+		path = f.OldName
+	}
+	return path
+}
+
+// specialFileMessage returns a centered message for special file types, or empty string for normal files.
+func (m Model) specialFileMessage(f diff.DiffFile) string {
+	if f.IsBinary {
+		return "Binary file changed — cannot display diff"
+	}
+	if f.IsSubmodule {
+		oldSHA, newSHA := extractSubmoduleSHAs(f)
+		return fmt.Sprintf("Submodule updated: %s → %s", oldSHA, newSHA)
+	}
+	if f.IsRename && len(f.Hunks) == 0 {
+		return "File renamed — no content changes"
+	}
+	if f.OldMode != 0 && f.NewMode != 0 && f.OldMode != f.NewMode && len(f.Hunks) == 0 {
+		return fmt.Sprintf("File mode changed: %04o → %04o", f.OldMode, f.NewMode)
+	}
+	return ""
+}
+
+// extractSubmoduleSHAs extracts old and new commit SHAs from submodule hunk lines.
+// Returns short SHAs (7 chars) for readability.
+func extractSubmoduleSHAs(f diff.DiffFile) (string, string) {
+	var oldSHA, newSHA string
+	for _, h := range f.Hunks {
+		for _, l := range h.Lines {
+			if strings.HasPrefix(l.Content, "Subproject commit ") {
+				sha := strings.TrimPrefix(l.Content, "Subproject commit ")
+				if len(sha) > 7 {
+					sha = sha[:7]
+				}
+				if l.Type == diff.LineDelete {
+					oldSHA = sha
+				} else if l.Type == diff.LineAdd {
+					newSHA = sha
+				}
+			}
+		}
+	}
+	if oldSHA == "" {
+		oldSHA = "(none)"
+	}
+	if newSHA == "" {
+		newSHA = "(none)"
+	}
+	return oldSHA, newSHA
+}
+
+// renderSpecialFileView renders the full view for a special file (binary, submodule, etc.)
+// with a centered message instead of diff content.
+func (m Model) renderSpecialFileView(f diff.DiffFile, msg string) string {
+	vis := m.visibleRows()
+
+	// Center the message in the viewport
+	diffContent := lipgloss.Place(m.width, vis, lipgloss.Center, lipgloss.Center, msg)
+
+	// Status bar
+	filePath := fileDisplayPath(f)
+
+	adds, dels := m.countFileChanges()
+	statusBar := RenderStatusBarWithMode(m.width, m.ref, m.activeFile, len(m.files), filePath, adds, dels, m.commentCount(), m.activeSide, f.OldMode, f.NewMode)
+
+	helpBar := RenderHelpBar(m.width, m.mode)
+
+	return statusBar + "\n" + diffContent + "\n" + helpBar
 }
 
 // openFuzzyFiles opens the built-in fuzzy overlay for file search.

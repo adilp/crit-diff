@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -83,6 +84,19 @@ func TestRenderStatusBar(t *testing.T) {
 			commentCount: 0,
 			side:         SideNew,
 		},
+		{
+			name:         "rename path display",
+			width:        120,
+			ref:          "main..HEAD",
+			fileIdx:      0,
+			fileCount:    5,
+			filePath:     "old/path.ts → new/path.ts",
+			adds:         10,
+			dels:         5,
+			commentCount: 0,
+			side:         SideNew,
+			contains:     []string{"old/path.ts → new/path.ts"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -97,6 +111,58 @@ func TestRenderStatusBar(t *testing.T) {
 
 			if result == "" {
 				t.Error("RenderStatusBar returned empty string")
+			}
+		})
+	}
+}
+
+func TestRenderStatusBarWithMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		oldMode  os.FileMode
+		newMode  os.FileMode
+		contains []string
+		absent   []string
+	}{
+		{
+			name:     "shows mode change when different",
+			oldMode:  0644,
+			newMode:  0755,
+			contains: []string{"0644", "0755"},
+		},
+		{
+			name:    "hides mode change when same",
+			oldMode: 0644,
+			newMode: 0644,
+			absent:  []string{"0644"},
+		},
+		{
+			name:    "hides mode change when old is zero",
+			oldMode: 0,
+			newMode: 0644,
+			absent:  []string{"→"},
+		},
+		{
+			name:    "hides mode change when new is zero",
+			oldMode: 0644,
+			newMode: 0,
+			absent:  []string{"→"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := RenderStatusBarWithMode(120, "main..HEAD", 0, 5, "script.sh", 0, 0, 0, SideNew, tt.oldMode, tt.newMode)
+
+			for _, s := range tt.contains {
+				if !strings.Contains(result, s) {
+					t.Errorf("expected output to contain %q, got: %s", s, result)
+				}
+			}
+			for _, s := range tt.absent {
+				if strings.Contains(result, s) {
+					t.Errorf("expected output to NOT contain %q, got: %s", s, result)
+				}
 			}
 		})
 	}

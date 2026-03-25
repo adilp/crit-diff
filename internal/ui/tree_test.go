@@ -79,6 +79,14 @@ func TestBuildTree(t *testing.T) {
 			wantIsDir: []bool{false},
 		},
 		{
+			name: "submodule indicator",
+			files: []diff.DiffFile{
+				{NewName: "libs/submod", IsSubmodule: true},
+			},
+			wantPaths: []string{"libs/", "submod"},
+			wantIsDir: []bool{true, false},
+		},
+		{
 			name: "deleted file uses OldName",
 			files: []diff.DiffFile{
 				{OldName: "removed.go", NewName: "", IsDeleted: true},
@@ -350,6 +358,16 @@ func TestRenderTree(t *testing.T) {
 			width:      30,
 			height:     10,
 			contains:   []string{"→"},
+		},
+		{
+			name: "shows submodule indicator",
+			files: []diff.DiffFile{
+				{NewName: "libs/submod", IsSubmodule: true},
+			},
+			activeFile: 0,
+			width:      30,
+			height:     10,
+			contains:   []string{"[sub]"},
 		},
 		{
 			name: "shows directory with trailing slash",

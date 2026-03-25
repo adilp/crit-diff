@@ -12,13 +12,14 @@ import (
 
 // TreeEntry represents a single entry in the file tree (file or directory).
 type TreeEntry struct {
-	Path      string // display path (compact, e.g. "src/services/auth/")
-	FullPath  string // original full path for the file
-	IsDir     bool
-	Depth     int
-	FileIndex int // index into Model.files (-1 for dirs)
-	IsBinary  bool
-	IsRename  bool
+	Path        string // display path (compact, e.g. "src/services/auth/")
+	FullPath    string // original full path for the file
+	IsDir       bool
+	Depth       int
+	FileIndex   int // index into Model.files (-1 for dirs)
+	IsBinary    bool
+	IsRename    bool
+	IsSubmodule bool
 }
 
 // TreeState holds the state of the file tree sidebar.
@@ -32,13 +33,14 @@ type TreeState struct {
 
 // dirNode is an internal tree node used during tree construction.
 type dirNode struct {
-	name     string
-	children []*dirNode // ordered children
-	isDir    bool
-	fileIdx  int // -1 for dirs
-	isBinary bool
-	isRename bool
-	fullPath string // full path from root
+	name        string
+	children    []*dirNode // ordered children
+	isDir       bool
+	fileIdx     int // -1 for dirs
+	isBinary    bool
+	isRename    bool
+	isSubmodule bool
+	fullPath    string // full path from root
 }
 
 // NewTreeState builds a TreeState from the list of diff files.
@@ -56,7 +58,7 @@ func NewTreeState(files []diff.DiffFile) TreeState {
 			path = f.OldName
 		}
 		parts := strings.Split(filepath.ToSlash(path), "/")
-		insertPath(root, parts, i, f.IsBinary, f.IsRename, "")
+		insertPath(root, parts, i, f.IsBinary, f.IsRename, f.IsSubmodule, "")
 	}
 
 	// Compact single-child directory chains
@@ -76,17 +78,18 @@ func NewTreeState(files []diff.DiffFile) TreeState {
 
 // insertPath inserts a file path into the tree, creating intermediate directory nodes.
 // parentPath accumulates the full path from root (e.g., "src/services/").
-func insertPath(node *dirNode, parts []string, fileIdx int, isBinary, isRename bool, parentPath string) {
+func insertPath(node *dirNode, parts []string, fileIdx int, isBinary, isRename, isSubmodule bool, parentPath string) {
 	fullPath := parentPath + parts[0]
 	if len(parts) == 1 {
 		// Leaf file node
 		node.children = append(node.children, &dirNode{
-			name:     parts[0],
-			isDir:    false,
-			fileIdx:  fileIdx,
-			isBinary: isBinary,
-			isRename: isRename,
-			fullPath: fullPath,
+			name:        parts[0],
+			isDir:       false,
+			fileIdx:     fileIdx,
+			isBinary:    isBinary,
+			isRename:    isRename,
+			isSubmodule: isSubmodule,
+			fullPath:    fullPath,
 		})
 		return
 	}
@@ -105,7 +108,7 @@ func insertPath(node *dirNode, parts []string, fileIdx int, isBinary, isRename b
 		node.children = append(node.children, child)
 	}
 
-	insertPath(child, parts[1:], fileIdx, isBinary, isRename, fullPath+"/")
+	insertPath(child, parts[1:], fileIdx, isBinary, isRename, isSubmodule, fullPath+"/")
 }
 
 // compactTree merges single-child directory chains.
@@ -144,13 +147,14 @@ func flattenNode(node *dirNode, depth int, entries *[]TreeEntry) {
 		}
 	} else {
 		*entries = append(*entries, TreeEntry{
-			Path:      node.name,
-			FullPath:  node.fullPath,
-			IsDir:     false,
-			Depth:     depth,
-			FileIndex: node.fileIdx,
-			IsBinary:  node.isBinary,
-			IsRename:  node.isRename,
+			Path:        node.name,
+			FullPath:    node.fullPath,
+			IsDir:       false,
+			Depth:       depth,
+			FileIndex:   node.fileIdx,
+			IsBinary:    node.isBinary,
+			IsRename:    node.isRename,
+			IsSubmodule: node.isSubmodule,
 		})
 	}
 }
@@ -282,11 +286,14 @@ func RenderTree(ts *TreeState, width, height, activeFile int, commentCounts map[
 			if e.IsBinary {
 				suffix = " " + dimStyle.Render("[bin]")
 			}
+			if e.IsSubmodule {
+				suffix = " " + dimStyle.Render("[sub]")
+			}
 
-			// Show comment count indicator
+			// Show comment count indicator (appended, not replacing type indicator)
 			if commentCounts != nil {
 				if n, ok := commentCounts[e.FullPath]; ok && n > 0 {
-					suffix = " " + dimStyle.Render(fmt.Sprintf("💬 (%d)", n))
+					suffix += " " + dimStyle.Render(fmt.Sprintf("💬 (%d)", n))
 				}
 			}
 

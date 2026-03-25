@@ -1514,3 +1514,168 @@ func TestVisualSelectQuit(t *testing.T) {
 		t.Error("expected quit command from visual mode")
 	}
 }
+
+// CR-019: Binary file, rename, submodule, mode change display tests
+
+func TestBinaryFileViewShowsCenteredMessage(t *testing.T) {
+	files := []diff.DiffFile{
+		{NewName: "image.png", IsBinary: true},
+	}
+	m := NewModel(files, nil, 120, 40)
+	m.allPaired = [][]diff.PairedLine{nil}
+	output := m.View()
+	if !strings.Contains(output, "Binary file changed") {
+		t.Errorf("binary file should show centered message, got:\n%s", output)
+	}
+}
+
+func TestBinaryFileNavigationNoCrash(t *testing.T) {
+	files := []diff.DiffFile{
+		{OldName: "file1.go", NewName: "file1.go",
+			Hunks: []diff.Hunk{{
+				OldStart: 1, OldCount: 1, NewStart: 1, NewCount: 1,
+				Lines: []diff.DiffLine{
+					{Type: diff.LineContext, OldNum: 1, NewNum: 1, Content: "normal"},
+				},
+			}},
+		},
+		{NewName: "image.png", IsBinary: true},
+		{OldName: "file3.go", NewName: "file3.go",
+			Hunks: []diff.Hunk{{
+				OldStart: 1, OldCount: 1, NewStart: 1, NewCount: 1,
+				Lines: []diff.DiffLine{
+					{Type: diff.LineContext, OldNum: 1, NewNum: 1, Content: "after binary"},
+				},
+			}},
+		},
+	}
+	allPaired := make([][]diff.PairedLine, len(files))
+	for i, f := range files {
+		allPaired[i] = diff.BuildPairedLines(f.Hunks)
+	}
+	m := NewModel(files, allPaired[0], 120, 40)
+	m.allPaired = allPaired
+
+	// Navigate to binary file with ]f
+	newModel, _ := m.Update(keyMsg("]"))
+	m = newModel.(Model)
+	newModel, _ = m.Update(keyMsg("f"))
+	m = newModel.(Model)
+
+	if m.activeFile != 1 {
+		t.Fatalf("expected activeFile 1, got %d", m.activeFile)
+	}
+
+	// Should render without panic
+	output := m.View()
+	if !strings.Contains(output, "Binary file changed") {
+		t.Errorf("binary file view should show message, got:\n%s", output)
+	}
+
+	// Navigate past binary to file3
+	newModel, _ = m.Update(keyMsg("]"))
+	m = newModel.(Model)
+	newModel, _ = m.Update(keyMsg("f"))
+	m = newModel.(Model)
+
+	if m.activeFile != 2 {
+		t.Fatalf("expected activeFile 2, got %d", m.activeFile)
+	}
+	output = m.View()
+	if strings.Contains(output, "Binary file changed") {
+		t.Error("file3 should not show binary message")
+	}
+}
+
+func TestRenameStatusBarDisplay(t *testing.T) {
+	files := []diff.DiffFile{
+		{OldName: "old/path.ts", NewName: "new/path.ts", IsRename: true,
+			Hunks: []diff.Hunk{{
+				OldStart: 1, OldCount: 1, NewStart: 1, NewCount: 1,
+				Lines: []diff.DiffLine{
+					{Type: diff.LineContext, OldNum: 1, NewNum: 1, Content: "content"},
+				},
+			}},
+		},
+	}
+	allPaired := make([][]diff.PairedLine, len(files))
+	allPaired[0] = diff.BuildPairedLines(files[0].Hunks)
+	m := NewModel(files, allPaired[0], 120, 40)
+	m.allPaired = allPaired
+
+	output := m.View()
+	if !strings.Contains(output, "old/path.ts") || !strings.Contains(output, "new/path.ts") {
+		t.Errorf("rename should show old → new in status bar, got:\n%s", output)
+	}
+}
+
+func TestRenameNoContentChangesMessage(t *testing.T) {
+	files := []diff.DiffFile{
+		{OldName: "old.go", NewName: "new.go", IsRename: true, Hunks: nil},
+	}
+	m := NewModel(files, nil, 120, 40)
+	m.allPaired = [][]diff.PairedLine{nil}
+	output := m.View()
+	if !strings.Contains(output, "File renamed") {
+		t.Errorf("rename with no changes should show message, got:\n%s", output)
+	}
+}
+
+func TestSubmoduleViewShowsMessage(t *testing.T) {
+	files := []diff.DiffFile{
+		{NewName: "libs/submod", IsSubmodule: true,
+			Hunks: []diff.Hunk{{
+				OldStart: 1, OldCount: 1, NewStart: 1, NewCount: 1,
+				Lines: []diff.DiffLine{
+					{Type: diff.LineDelete, OldNum: 1, Content: "Subproject commit abc1234"},
+					{Type: diff.LineAdd, NewNum: 1, Content: "Subproject commit def5678"},
+				},
+			}},
+		},
+	}
+	allPaired := make([][]diff.PairedLine, len(files))
+	allPaired[0] = diff.BuildPairedLines(files[0].Hunks)
+	m := NewModel(files, allPaired[0], 120, 40)
+	m.allPaired = allPaired
+	output := m.View()
+	if !strings.Contains(output, "Submodule updated") {
+		t.Errorf("submodule should show update message, got:\n%s", output)
+	}
+	// SHAs are truncated to 7 chars for readability
+	if !strings.Contains(output, "abc1234") || !strings.Contains(output, "def5678") {
+		t.Errorf("submodule should show old and new short SHAs, got:\n%s", output)
+	}
+}
+
+func TestModeChangeStatusBar(t *testing.T) {
+	files := []diff.DiffFile{
+		{OldName: "script.sh", NewName: "script.sh", OldMode: 0644, NewMode: 0755,
+			Hunks: []diff.Hunk{{
+				OldStart: 1, OldCount: 1, NewStart: 1, NewCount: 1,
+				Lines: []diff.DiffLine{
+					{Type: diff.LineContext, OldNum: 1, NewNum: 1, Content: "#!/bin/bash"},
+				},
+			}},
+		},
+	}
+	allPaired := make([][]diff.PairedLine, len(files))
+	allPaired[0] = diff.BuildPairedLines(files[0].Hunks)
+	m := NewModel(files, allPaired[0], 120, 40)
+	m.allPaired = allPaired
+	output := m.View()
+	if !strings.Contains(output, "0644") || !strings.Contains(output, "0755") {
+		t.Errorf("mode change should show in status bar, got:\n%s", output)
+	}
+}
+
+func TestModeOnlyChangeMessage(t *testing.T) {
+	files := []diff.DiffFile{
+		{OldName: "script.sh", NewName: "script.sh", OldMode: 0644, NewMode: 0755, Hunks: nil},
+	}
+	m := NewModel(files, nil, 120, 40)
+	m.allPaired = [][]diff.PairedLine{nil}
+	output := m.View()
+	if !strings.Contains(output, "File mode changed") {
+		t.Errorf("mode-only change should show message, got:\n%s", output)
+	}
+}
