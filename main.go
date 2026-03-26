@@ -261,7 +261,12 @@ func runDetached(crArgs []string, wait bool) error {
 
 	splitCmd := exec.Command(tmuxBin, "split-window", "-h", "-p", "70", paneCmd)
 	if err := splitCmd.Run(); err != nil {
-		return fmt.Errorf("failed to open tmux pane: %w", err)
+		// Retry without -p flag — percentage sizing fails when parent pane
+		// size isn't available (e.g. invoked from a subprocess like Claude Code)
+		splitCmd = exec.Command(tmuxBin, "split-window", "-h", paneCmd)
+		if err := splitCmd.Run(); err != nil {
+			return fmt.Errorf("failed to open tmux pane: %w", err)
+		}
 	}
 
 	fmt.Fprintln(os.Stderr, "Opened cr in tmux pane")

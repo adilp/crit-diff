@@ -20,11 +20,14 @@ Check if `$TMUX` is set:
 cr --detach --wait $ARGUMENTS
 ```
 
-If that fails (e.g., tmux error), fall back to:
+If that fails (e.g., tmux error), fall back to opening the pane manually and blocking with wait-for:
 ```bash
-tmux split-window -h -p 70 "cr $ARGUMENTS"
+tmux split-window -h "cr $ARGUMENTS ; tmux wait-for -S cr-review-done"
 ```
-Then tell the user: "I've opened cr in a tmux pane. Review the diff, leave comments with `c`, and press `q` when done. Let me know when you're finished."
+Then block until the user quits:
+```bash
+tmux wait-for cr-review-done
+```
 
 **If not in tmux**, ask the user to run it manually:
 
