@@ -5,8 +5,8 @@
   "author": {
     "name": "Adil"
   },
-  "homepage": "https://github.com/adil/cr",
-  "repository": "https://github.com/adil/cr",
+  "homepage": "https://github.com/adilp/crit-diff",
+  "repository": "https://github.com/adilp/crit-diff",
   "license": "MIT",
   "keywords": ["review", "diff", "tui", "code-review", "side-by-side", "crit", "vim"]
 }

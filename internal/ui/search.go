@@ -3,7 +3,7 @@ package ui
 import (
 	"strings"
 
-	"github.com/adil/cr/internal/diff"
+	"github.com/adilp/crit-diff/internal/diff"
 	"github.com/charmbracelet/bubbles/textinput"
 )
 

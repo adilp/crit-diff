@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/adil/cr/internal/config"
+	"github.com/adilp/crit-diff/internal/config"
 	"github.com/charmbracelet/lipgloss"
 )
 

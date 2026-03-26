@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adil/cr/internal/config"
-	"github.com/adil/cr/internal/diff"
+	"github.com/adilp/crit-diff/internal/config"
+	"github.com/adilp/crit-diff/internal/diff"
 	tea "github.com/charmbracelet/bubbletea"
 )
 

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adil/cr/internal/diff"
+	"github.com/adilp/crit-diff/internal/diff"
 )
 
 // buildExpandableHunks creates two hunks with a gap for context expansion.

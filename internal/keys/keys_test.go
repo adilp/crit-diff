@@ -3,7 +3,7 @@ package keys
 import (
 	"testing"
 
-	"github.com/adil/cr/internal/config"
+	"github.com/adilp/crit-diff/internal/config"
 )
 
 func defaultCfg() config.Config {

@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"github.com/adil/cr/internal/diff"
+	"github.com/adilp/crit-diff/internal/diff"
 )
 
 func buildSearchPairs() []diff.PairedLine {

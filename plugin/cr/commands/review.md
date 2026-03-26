@@ -13,7 +13,7 @@ Launch cr's side-by-side diff TUI for the user to review code changes and leave 
 The `cr` binary must be installed and on PATH. If not installed:
 
 ```bash
-go install github.com/adil/cr@latest
+go install github.com/adilp/crit-diff@latest
 ```
 
 ## Step 1: Launch the TUI

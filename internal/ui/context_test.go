@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/adil/cr/internal/diff"
+	"github.com/adilp/crit-diff/internal/diff"
 )
 
 func TestComputeMaxGap(t *testing.T) {

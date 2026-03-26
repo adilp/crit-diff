@@ -10,9 +10,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/adil/cr/internal/comment"
-	"github.com/adil/cr/internal/diff"
-	"github.com/adil/cr/internal/ui"
+	"github.com/adilp/crit-diff/internal/comment"
+	"github.com/adilp/crit-diff/internal/diff"
+	"github.com/adilp/crit-diff/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
 	"gopkg.in/yaml.v3"
 )

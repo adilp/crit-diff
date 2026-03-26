@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adil/cr/internal/comment"
+	"github.com/adilp/crit-diff/internal/comment"
 )
 
 func TestParseArgs(t *testing.T) {

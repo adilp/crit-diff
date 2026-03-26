@@ -20,7 +20,7 @@ Then use `/cr:review <ref>` to open the TUI. After you close it, Claude reads yo
 ### From source
 
 ```bash
-go install github.com/adil/cr@latest
+go install github.com/adilp/crit-diff@latest
 ```
 
 Make sure `$GOPATH/bin` (defaults to `~/go/bin`) is in your `PATH`:

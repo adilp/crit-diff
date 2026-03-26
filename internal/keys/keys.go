@@ -4,7 +4,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/adil/cr/internal/config"
+	"github.com/adilp/crit-diff/internal/config"
 )
 
 // Action represents a resolved keybinding action.

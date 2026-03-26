@@ -1,4 +1,4 @@
-module github.com/adil/cr
+module github.com/adilp/crit-diff
 
 go 1.26.1
 

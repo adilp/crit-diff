@@ -1,7 +1,7 @@
 package ui
 
 import (
-	"github.com/adil/cr/internal/diff"
+	"github.com/adilp/crit-diff/internal/diff"
 )
 
 // SeparatorState tracks the expansion state for a separator between two hunks.
