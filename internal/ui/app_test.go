@@ -424,23 +424,23 @@ func TestViewWithHighlightingAndWordDiff(t *testing.T) {
 func TestWordDiffToggle(t *testing.T) {
 	m := newTestModel(buildTestPairs(), 120, 40)
 
-	// Initially wordDiff should be false
-	if m.wordDiff {
-		t.Error("wordDiff should be false initially")
+	// Initially wordDiff should be true (default config)
+	if !m.wordDiff {
+		t.Error("wordDiff should be true initially")
 	}
 
-	// Press 'w' to toggle on
+	// Press 'w' to toggle off
 	newModel, _ := m.Update(keyMsg("w"))
 	m = newModel.(Model)
-	if !m.wordDiff {
-		t.Error("wordDiff should be true after pressing 'w'")
+	if m.wordDiff {
+		t.Error("wordDiff should be false after pressing 'w'")
 	}
 
-	// Press 'w' again to toggle off
+	// Press 'w' again to toggle on
 	newModel, _ = m.Update(keyMsg("w"))
 	m = newModel.(Model)
-	if m.wordDiff {
-		t.Error("wordDiff should be false after pressing 'w' again")
+	if !m.wordDiff {
+		t.Error("wordDiff should be true after pressing 'w' again")
 	}
 }
 

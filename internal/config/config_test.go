@@ -18,8 +18,8 @@ func TestLoad_NoConfigFile(t *testing.T) {
 	if cfg.Display.Theme != "auto" {
 		t.Errorf("Theme: got %q, want %q", cfg.Display.Theme, "auto")
 	}
-	if cfg.Display.WordDiff != false {
-		t.Error("WordDiff: got true, want false")
+	if cfg.Display.WordDiff != true {
+		t.Error("WordDiff: got false, want true")
 	}
 	if cfg.Display.Wrap != false {
 		t.Error("Wrap: got true, want false")
@@ -121,8 +121,8 @@ theme = "dark"
 	if cfg.Display.MinWidth != 100 {
 		t.Errorf("MinWidth: got %d, want %d", cfg.Display.MinWidth, 100)
 	}
-	if cfg.Display.WordDiff != false {
-		t.Error("WordDiff: got true, want false")
+	if cfg.Display.WordDiff != true {
+		t.Error("WordDiff: got false, want true")
 	}
 
 	// Keybindings should all be defaults
@@ -309,6 +309,65 @@ min_width = 120
 	}
 	if cfg.Keys.Comment["delete"] != "dd" {
 		t.Errorf("Comment[delete]: got %q, want %q", cfg.Keys.Comment["delete"], "dd")
+	}
+}
+
+func TestLoad_DefaultColors(t *testing.T) {
+	dir := t.TempDir()
+	cfg, _ := Load(filepath.Join(dir, "nonexistent.toml"))
+
+	// Verify color defaults exist
+	if cfg.Colors.AddBg == "" {
+		t.Error("Colors.AddBg should have a default value")
+	}
+	if cfg.Colors.DeleteBg == "" {
+		t.Error("Colors.DeleteBg should have a default value")
+	}
+	if cfg.Colors.EmphasisAdd == "" {
+		t.Error("Colors.EmphasisAdd should have a default value")
+	}
+	if cfg.Colors.EmphasisDelete == "" {
+		t.Error("Colors.EmphasisDelete should have a default value")
+	}
+	if cfg.Colors.CursorActive == "" {
+		t.Error("Colors.CursorActive should have a default value")
+	}
+}
+
+func TestLoad_CustomColors(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	content := `[colors]
+add_bg = "#003300"
+delete_bg = "#330000"
+emphasis_add = "#005500"
+emphasis_delete = "#550000"
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Colors.AddBg != "#003300" {
+		t.Errorf("Colors.AddBg: got %q, want %q", cfg.Colors.AddBg, "#003300")
+	}
+	if cfg.Colors.DeleteBg != "#330000" {
+		t.Errorf("Colors.DeleteBg: got %q, want %q", cfg.Colors.DeleteBg, "#330000")
+	}
+	if cfg.Colors.EmphasisAdd != "#005500" {
+		t.Errorf("Colors.EmphasisAdd: got %q, want %q", cfg.Colors.EmphasisAdd, "#005500")
+	}
+	if cfg.Colors.EmphasisDelete != "#550000" {
+		t.Errorf("Colors.EmphasisDelete: got %q, want %q", cfg.Colors.EmphasisDelete, "#550000")
+	}
+
+	// Non-overridden colors should retain defaults
+	if cfg.Colors.CursorActive == "" {
+		t.Error("Colors.CursorActive should retain default")
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 type Config struct {
 	Keys    KeysConfig
 	Display DisplayConfig
+	Colors  ColorsConfig
 }
 
 // KeysConfig holds keybinding configuration.
@@ -19,6 +20,17 @@ type KeysConfig struct {
 	Leader  string
 	Normal  map[string]string
 	Comment map[string]string
+}
+
+// ColorsConfig holds user-customizable color values.
+// Values can be hex (#rrggbb) or 256-color numbers ("22", "52", etc.).
+type ColorsConfig struct {
+	AddBg          string // background for added lines
+	DeleteBg       string // background for deleted lines
+	EmphasisAdd    string // word-level emphasis on added text
+	EmphasisDelete string // word-level emphasis on deleted text
+	CursorActive   string // cursor background on active pane
+	CursorInactive string // cursor background on inactive pane
 }
 
 // DisplayConfig holds display preferences.
@@ -34,12 +46,22 @@ type DisplayConfig struct {
 type tomlConfig struct {
 	Keys    tomlKeysConfig    `toml:"keys"`
 	Display tomlDisplayConfig `toml:"display"`
+	Colors  tomlColorsConfig  `toml:"colors"`
 }
 
 type tomlKeysConfig struct {
 	Leader  string            `toml:"leader"`
 	Normal  map[string]string `toml:"normal"`
 	Comment map[string]string `toml:"comment"`
+}
+
+type tomlColorsConfig struct {
+	AddBg          *string `toml:"add_bg"`
+	DeleteBg       *string `toml:"delete_bg"`
+	EmphasisAdd    *string `toml:"emphasis_add"`
+	EmphasisDelete *string `toml:"emphasis_delete"`
+	CursorActive   *string `toml:"cursor_active"`
+	CursorInactive *string `toml:"cursor_inactive"`
 }
 
 type tomlDisplayConfig struct {
@@ -89,10 +111,18 @@ func defaultConfig() Config {
 		},
 		Display: DisplayConfig{
 			Theme:    "auto",
-			WordDiff: false,
+			WordDiff: true,
 			Wrap:     false,
 			TabWidth: 4,
 			MinWidth: 100,
+		},
+		Colors: ColorsConfig{
+			AddBg:          "#0d2818",
+			DeleteBg:       "#2d1117",
+			EmphasisAdd:    "#1a4d2e",
+			EmphasisDelete: "#5c1a1a",
+			CursorActive:   "237",
+			CursorInactive: "235",
 		},
 	}
 }
@@ -145,6 +175,26 @@ func Load(path string) (Config, error) {
 	}
 	if parsed.Display.MinWidth != nil {
 		cfg.Display.MinWidth = *parsed.Display.MinWidth
+	}
+
+	// Merge colors
+	if parsed.Colors.AddBg != nil {
+		cfg.Colors.AddBg = *parsed.Colors.AddBg
+	}
+	if parsed.Colors.DeleteBg != nil {
+		cfg.Colors.DeleteBg = *parsed.Colors.DeleteBg
+	}
+	if parsed.Colors.EmphasisAdd != nil {
+		cfg.Colors.EmphasisAdd = *parsed.Colors.EmphasisAdd
+	}
+	if parsed.Colors.EmphasisDelete != nil {
+		cfg.Colors.EmphasisDelete = *parsed.Colors.EmphasisDelete
+	}
+	if parsed.Colors.CursorActive != nil {
+		cfg.Colors.CursorActive = *parsed.Colors.CursorActive
+	}
+	if parsed.Colors.CursorInactive != nil {
+		cfg.Colors.CursorInactive = *parsed.Colors.CursorInactive
 	}
 
 	return cfg, nil

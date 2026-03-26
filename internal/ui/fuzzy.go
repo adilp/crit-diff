@@ -235,7 +235,7 @@ func FindRowForLine(pairs []diff.PairedLine, lineNum int, side Side) int {
 }
 
 // RenderFuzzyOverlay renders the built-in fuzzy search overlay.
-func RenderFuzzyOverlay(fs *FuzzyState, width, height int) string {
+func RenderFuzzyOverlay(fs *FuzzyState, width, height int, cursorColor string) string {
 	maxItems := height - 4
 	if maxItems < 1 {
 		maxItems = 1
@@ -246,7 +246,7 @@ func RenderFuzzyOverlay(fs *FuzzyState, width, height int) string {
 
 	// Build filtered list
 	var listLines []string
-	cursorStyle := lipgloss.NewStyle().Background(lipgloss.Color(colorCursorActive))
+	cursorStyle := lipgloss.NewStyle().Background(lipgloss.Color(cursorColor))
 	normalStyle := lipgloss.NewStyle()
 
 	end := fs.YOffset + maxItems

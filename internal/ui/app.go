@@ -41,15 +41,9 @@ const (
 const (
 	colorAdd            = "2"   // green foreground for added lines
 	colorDelete         = "1"   // red foreground for deleted lines
-	colorCursorActive   = "237" // brighter background for cursor on active pane
-	colorCursorInactive = "235" // dimmer background for cursor on inactive pane
-	colorPaddingBg      = "233" // subtle background for blank padding rows
-	colorPaddingFg      = "239" // foreground for padding rows
-	colorSeparator      = "240" // foreground for hunk separator lines
-	colorAddBg          = "22"  // subtle green background for added lines
-	colorDeleteBg       = "52"  // subtle red background for deleted lines
-	colorEmphasisAdd    = "22"  // dark green background for word-level add emphasis
-	colorEmphasisDelete = "52"  // dark red background for word-level delete emphasis
+	colorPaddingBg  = "233" // subtle background for blank padding rows
+	colorPaddingFg  = "239" // foreground for padding rows
+	colorSeparator  = "240" // foreground for hunk separator lines
 	colorBarBg          = "236" // dark gray background for status/help bars
 	colorBarFg          = "252" // light foreground for bar text
 	colorBarDim         = "245" // dimmer foreground for help bar action labels
@@ -109,6 +103,7 @@ func NewModel(files []diff.DiffFile, paired []diff.PairedLine, width, height int
 		tree:       NewTreeState(files),
 		config:     cfg,
 		renderer:   render.NewRenderer(),
+		wordDiff:   cfg.Display.WordDiff,
 		wrapMode:   cfg.Display.Wrap,
 	}
 }
@@ -725,7 +720,7 @@ func (m Model) View() string {
 
 	// Render fuzzy overlay when active
 	if m.mode == InputModeFuzzy && m.fuzzy.Active {
-		result = RenderFuzzyOverlay(&m.fuzzy, m.width, m.height)
+		result = RenderFuzzyOverlay(&m.fuzzy, m.width, m.height, m.config.Colors.CursorActive)
 	}
 
 	// Render help overlay when active
@@ -750,7 +745,7 @@ func (m Model) highlightPair(p diff.PairedLine) (string, string) {
 			// Apply word-level emphasis if enabled and this is a delete paired with an add
 			if m.wordDiff && p.Left.Type == diff.LineDelete && p.Right != nil && p.Right.Type == diff.LineAdd {
 				oldMask, _ := render.ComputeWordDiff(p.Left.Content, p.Right.Content)
-				hl = render.ApplyEmphasis(hl, oldMask, colorEmphasisDelete)
+				hl = render.ApplyEmphasis(hl, oldMask, m.config.Colors.EmphasisDelete)
 			}
 			// Apply search highlight (active search or live preview while typing)
 			if m.search.Query != "" {
@@ -770,7 +765,7 @@ func (m Model) highlightPair(p diff.PairedLine) (string, string) {
 			// Apply word-level emphasis if enabled and this is an add paired with a delete
 			if m.wordDiff && p.Right.Type == diff.LineAdd && p.Left != nil && p.Left.Type == diff.LineDelete {
 				_, newMask := render.ComputeWordDiff(p.Left.Content, p.Right.Content)
-				hl = render.ApplyEmphasis(hl, newMask, colorEmphasisAdd)
+				hl = render.ApplyEmphasis(hl, newMask, m.config.Colors.EmphasisAdd)
 			}
 			// Apply search highlight (active search or live preview while typing)
 			if m.search.Query != "" {
@@ -860,16 +855,16 @@ func (m Model) renderPane(line *diff.DiffLine, side Side, paneWidth, lineNumWidt
 	// Background: cursor overrides line tint, otherwise changed lines get subtle color
 	if isCursor {
 		if isActiveSide {
-			style = style.Background(lipgloss.Color(colorCursorActive))
+			style = style.Background(lipgloss.Color(m.config.Colors.CursorActive))
 		} else {
-			style = style.Background(lipgloss.Color(colorCursorInactive))
+			style = style.Background(lipgloss.Color(m.config.Colors.CursorInactive))
 		}
 	} else {
 		switch line.Type {
 		case diff.LineAdd:
-			style = style.Background(lipgloss.Color(colorAddBg))
+			style = style.Background(lipgloss.Color(m.config.Colors.AddBg))
 		case diff.LineDelete:
-			style = style.Background(lipgloss.Color(colorDeleteBg))
+			style = style.Background(lipgloss.Color(m.config.Colors.DeleteBg))
 		}
 	}
 
@@ -882,9 +877,9 @@ func (m Model) renderBlankPadding(paneWidth int, isCursor, isActiveSide bool) st
 	style := lipgloss.NewStyle().Foreground(lipgloss.Color(colorPaddingFg))
 	if isCursor {
 		if isActiveSide {
-			style = style.Background(lipgloss.Color(colorCursorActive))
+			style = style.Background(lipgloss.Color(m.config.Colors.CursorActive))
 		} else {
-			style = style.Background(lipgloss.Color(colorCursorInactive))
+			style = style.Background(lipgloss.Color(m.config.Colors.CursorInactive))
 		}
 	} else {
 		style = style.Background(lipgloss.Color(colorPaddingBg))
@@ -918,9 +913,9 @@ func (m Model) renderWrapContinuation(source *diff.DiffLine, side Side, paneWidt
 		style := lipgloss.NewStyle()
 		if isCursor {
 			if isActiveSide {
-				style = style.Background(lipgloss.Color(colorCursorActive))
+				style = style.Background(lipgloss.Color(m.config.Colors.CursorActive))
 			} else {
-				style = style.Background(lipgloss.Color(colorCursorInactive))
+				style = style.Background(lipgloss.Color(m.config.Colors.CursorInactive))
 			}
 		}
 		return style.Render(padded)
@@ -951,16 +946,16 @@ func (m Model) renderWrapContinuation(source *diff.DiffLine, side Side, paneWidt
 
 	if isCursor {
 		if isActiveSide {
-			style = style.Background(lipgloss.Color(colorCursorActive))
+			style = style.Background(lipgloss.Color(m.config.Colors.CursorActive))
 		} else {
-			style = style.Background(lipgloss.Color(colorCursorInactive))
+			style = style.Background(lipgloss.Color(m.config.Colors.CursorInactive))
 		}
 	} else {
 		switch source.Type {
 		case diff.LineAdd:
-			style = style.Background(lipgloss.Color(colorAddBg))
+			style = style.Background(lipgloss.Color(m.config.Colors.AddBg))
 		case diff.LineDelete:
-			style = style.Background(lipgloss.Color(colorDeleteBg))
+			style = style.Background(lipgloss.Color(m.config.Colors.DeleteBg))
 		}
 	}
 
@@ -987,7 +982,7 @@ func (m Model) renderCommentRow(p diff.PairedLine, paneWidth int, isCursor bool)
 		Background(lipgloss.Color(colorCommentBg))
 
 	if isCursor {
-		style = style.Background(lipgloss.Color(colorCursorActive))
+		style = style.Background(lipgloss.Color(m.config.Colors.CursorActive))
 	}
 
 	return style.Render(text)
