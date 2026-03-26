@@ -10,6 +10,7 @@ import (
 type DiffArgs struct {
 	RefRange string   // "" for working tree, "main" for single ref, "a..b" for range
 	Paths    []string // path filters after "--"
+	Staged   bool     // true for --staged/--cached (git diff --cached)
 }
 
 // GetDiff executes the appropriate git diff command and returns the raw unified diff output.
@@ -18,6 +19,9 @@ func GetDiff(args DiffArgs, dir string) (string, error) {
 	gitArgs := []string{"-C", dir, "diff"}
 
 	switch {
+	case args.Staged:
+		// Staged changes: git diff --cached
+		gitArgs = append(gitArgs, "--cached")
 	case args.RefRange == "":
 		// Working tree: git diff HEAD
 		gitArgs = append(gitArgs, "HEAD")

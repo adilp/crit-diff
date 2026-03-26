@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 
 	"github.com/adil/cr/internal/comment"
@@ -18,6 +19,7 @@ const (
 	ModeWorkingTree Mode = "working_tree"
 	ModeSingleRef   Mode = "single_ref"
 	ModeRefRange    Mode = "ref_range"
+	ModeStaged      Mode = "staged"
 )
 
 type Args struct {
@@ -27,6 +29,9 @@ type Args struct {
 	PathFilters []string
 	Help        bool
 }
+
+// numRe matches numeric shortcuts like -1, -3, -10.
+var numRe = regexp.MustCompile(`^-\d+$`)
 
 // execCommand wraps exec.Command to allow substitution in tests.
 var execCommand = exec.Command
@@ -70,6 +75,20 @@ func parseArgs(args []string) Args {
 		return result
 	}
 
+	if ref == "--staged" || ref == "--cached" {
+		result.Mode = ModeStaged
+		return result
+	}
+
+	// Numeric shortcut: -N → HEAD~N..HEAD
+	if numRe.MatchString(ref) {
+		n := ref[1:] // strip leading "-"
+		result.Mode = ModeRefRange
+		result.RefFrom = "HEAD~" + n
+		result.RefTo = "HEAD"
+		return result
+	}
+
 	if strings.Contains(ref, "..") {
 		parts := strings.SplitN(ref, "..", 2)
 		result.Mode = ModeRefRange
@@ -100,6 +119,11 @@ Modes:
   cr <ref>                  Review changes from <ref> to HEAD
   cr <refA>..<refB>         Review changes between two refs
   cr <ref> -- <path>...     Review changes filtered to specific paths
+
+Shortcuts:
+  cr -1                     Last commit
+  cr -3                     Last 3 commits
+  cr --staged               Only staged changes (same as --cached)
 
 Options:
   -h, --help                Show this help message
@@ -135,6 +159,8 @@ func main() {
 		diffArgs.RefRange = args.RefFrom + ".." + args.RefTo
 	case ModeSingleRef:
 		diffArgs.RefRange = args.RefFrom
+	case ModeStaged:
+		diffArgs.Staged = true
 	}
 
 	// Get raw diff
@@ -166,6 +192,8 @@ func main() {
 	switch args.Mode {
 	case ModeWorkingTree:
 		diffBase = "HEAD"
+	case ModeStaged:
+		diffBase = "HEAD (staged)"
 	case ModeSingleRef:
 		diffBase = args.RefFrom
 	case ModeRefRange:
@@ -197,6 +225,9 @@ func main() {
 	case ModeWorkingTree:
 		refOld = "HEAD"
 		refNew = "" // working tree — read from disk
+	case ModeStaged:
+		refOld = "HEAD"
+		refNew = "" // staged — read from index (git show :path)
 	case ModeSingleRef:
 		refOld = args.RefFrom
 		refNew = "HEAD"
@@ -205,8 +236,15 @@ func main() {
 		refNew = args.RefTo
 	}
 
+	// Create comment store, load existing comments
+	store := comment.NewStore(repoRoot)
+	if err := store.LoadAll(filePaths); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not load comments: %v\n", err)
+	}
+
 	// Launch TUI
 	m := ui.NewModel(files, paired, 0, 0)
+	m.SetStore(store)
 
 	// Set ref for status bar display
 	switch args.Mode {
@@ -214,6 +252,8 @@ func main() {
 		m.SetRef(args.RefFrom + ".." + args.RefTo)
 	case ModeSingleRef:
 		m.SetRef(args.RefFrom + "..HEAD")
+	case ModeStaged:
+		m.SetRef("(staged)")
 	}
 
 	// Lazy-fetch and highlight the first file

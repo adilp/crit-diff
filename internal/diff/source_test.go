@@ -159,6 +159,35 @@ func TestGetDiff(t *testing.T) {
 	}
 }
 
+func TestGetDiffStaged(t *testing.T) {
+	dir := setupTestRepo(t)
+
+	// Stage the working tree change (file.txt has "hello\nworld\nlocal\n" unstaged)
+	cmd := exec.Command("git", "-C", dir, "add", "file.txt")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add failed: %s: %v", out, err)
+	}
+
+	got, err := GetDiff(DiffArgs{Staged: true}, dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(got, "+local") {
+		t.Errorf("expected staged diff to contain +local, got:\n%s", got)
+	}
+
+	// Non-staged mode should NOT show the staged change (it's no longer unstaged)
+	gotUnstaged, err := GetDiff(DiffArgs{}, dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Working tree diff against HEAD should still show the change
+	if !strings.Contains(gotUnstaged, "+local") {
+		t.Errorf("expected working tree diff to contain +local, got:\n%s", gotUnstaged)
+	}
+}
+
 func TestGetRepoRoot(t *testing.T) {
 	dir := setupTestRepo(t)
 

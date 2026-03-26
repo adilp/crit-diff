@@ -65,6 +65,51 @@ func TestParseArgs(t *testing.T) {
 			wantRefTo:   "c3d4",
 			wantPaths:   []string{"src/"},
 		},
+		{
+			name:        "numeric shortcut -1",
+			args:        []string{"-1"},
+			wantMode:    ModeRefRange,
+			wantRefFrom: "HEAD~1",
+			wantRefTo:   "HEAD",
+		},
+		{
+			name:        "numeric shortcut -3",
+			args:        []string{"-3"},
+			wantMode:    ModeRefRange,
+			wantRefFrom: "HEAD~3",
+			wantRefTo:   "HEAD",
+		},
+		{
+			name:        "numeric shortcut -10",
+			args:        []string{"-10"},
+			wantMode:    ModeRefRange,
+			wantRefFrom: "HEAD~10",
+			wantRefTo:   "HEAD",
+		},
+		{
+			name:        "numeric shortcut with path filters",
+			args:        []string{"-2", "--", "src/"},
+			wantMode:    ModeRefRange,
+			wantRefFrom: "HEAD~2",
+			wantRefTo:   "HEAD",
+			wantPaths:   []string{"src/"},
+		},
+		{
+			name:     "--staged flag",
+			args:     []string{"--staged"},
+			wantMode: ModeStaged,
+		},
+		{
+			name:      "--staged with path filters",
+			args:      []string{"--staged", "--", "src/"},
+			wantMode:  ModeStaged,
+			wantPaths: []string{"src/"},
+		},
+		{
+			name:     "--cached alias for --staged",
+			args:     []string{"--cached"},
+			wantMode: ModeStaged,
+		},
 	}
 
 	for _, tt := range tests {
