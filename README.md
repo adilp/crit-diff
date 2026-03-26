@@ -1,8 +1,10 @@
 # cr
 
-A full-screen, side-by-side diff viewer with vim-native navigation that writes comments to [crit](https://github.com/kevindutra/crit)-compatible `.crit/` format.
+A full-screen, side-by-side diff viewer with vim-native navigation. A companion to [crit](https://github.com/kevindutra/crit) — the excellent terminal review tool for markdown documents.
 
-`cr` is the *lens* — crit is the *notebook*. Review diffs in a GitHub-style TUI, leave inline comments, and let Claude Code address your feedback automatically.
+Where crit handles document review (plans, specs, markdown), cr handles **git diff review** (code changes across files) with a GitHub-style side-by-side TUI. Both tools share the same `.crit/` comment format, so they work together seamlessly as part of the same review ecosystem.
+
+We recommend installing both for the full workflow — crit for reviewing what Claude writes, cr for reviewing what Claude changes.
 
 ## Install
 
@@ -172,14 +174,47 @@ git repo ──git diff──> cr (TUI) ──.crit/ YAML──> crit / Claude
 4. `cr status` outputs all comments as JSON for Claude (or any tool) to consume
 5. Claude reads the comments, edits your code, and you can re-review with `cr`
 
-### Interop with crit
+## Better Together: cr + crit
 
-cr and crit share the same `.crit/` storage format:
+cr was built to complement [crit](https://github.com/kevindutra/crit), not replace it. They cover different parts of the review workflow and share the same `.crit/` storage format:
 
-- Comments left in cr can be read by `crit status <file>`
-- Comments left in crit can be seen in cr
-- The session manifest at `.crit/code-review.yaml` is readable by both tools
-- You can use cr for visual diff review and crit for document review — they don't conflict
+| Tool | Reviews | Think of it as |
+|------|---------|----------------|
+| **crit** | Markdown documents (plans, specs, designs) | "Review what Claude writes" |
+| **cr** | Git diffs (code changes across files) | "Review what Claude changes" |
+
+### Shared storage
+
+Both tools read and write to `.crit/reviews/` using the same YAML schema:
+- Comments left in cr show up in `crit status <file>`
+- Comments left in crit are visible in cr
+- The session manifest at `.crit/code-review.yaml` is readable by both
+
+### The full ecosystem
+
+```bash
+# Install both
+go install github.com/kevindutra/crit/cmd/crit@latest
+go install github.com/adilp/crit-diff@latest
+
+# Claude writes a plan → review the document with crit
+crit review docs/plan.md
+
+# Claude implements the plan → review the code changes with cr
+cr main
+
+# Both leave comments in .crit/ → Claude addresses them
+claude "address the comments in .crit/"
+```
+
+### In Claude Code
+
+```
+/crit:review docs/plan.md   → crit opens to review the document
+/cr-review main              → cr opens to review the diff
+```
+
+Both skills follow the same pattern: open TUI in a tmux pane, user reviews and comments, Claude reads the comments and acts on them.
 
 ## Configuration
 
