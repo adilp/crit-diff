@@ -88,6 +88,7 @@ type Model struct {
 	separatorStates []SeparatorState         // expansion state per separator
 	oldFileLines    []string                 // full old file content (0-indexed line strings)
 	newFileLines    []string                 // full new file content (0-indexed line strings)
+	wrapMode        bool                     // true = lines wrap within pane, false = clipped
 }
 
 // NewModel creates a new TUI model with the given diff data and terminal dimensions.
@@ -103,6 +104,7 @@ func NewModel(files []diff.DiffFile, paired []diff.PairedLine, width, height int
 		tree:       NewTreeState(files),
 		config:     cfg,
 		renderer:   render.NewRenderer(),
+		wrapMode:   cfg.Display.Wrap,
 	}
 }
 
@@ -166,6 +168,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.wrapMode {
+			m.recomputeWrap()
+		}
 		m.clampCursor()
 		return m, nil
 	}
@@ -333,6 +338,7 @@ func (m Model) handleAction(action keys.Action) (tea.Model, tea.Cmd) {
 		m.openSearch()
 	case keys.ActionHelp:
 	case keys.ActionToggleWrap:
+		m.toggleWrap()
 	case keys.ActionDiscard, keys.ActionNone:
 	}
 	return m, nil
@@ -524,8 +530,49 @@ func (m *Model) scrollToCursor() {
 	}
 }
 
+// toggleWrap toggles line wrapping mode and recomputes paired lines.
+func (m *Model) toggleWrap() {
+	m.wrapMode = !m.wrapMode
+	m.recomputeWrap()
+}
+
+// recomputeWrap rebuilds paired lines for the active file based on wrap mode.
+func (m *Model) recomputeWrap() {
+	if len(m.files) == 0 || m.activeFile >= len(m.files) {
+		return
+	}
+	if m.wrapMode {
+		// Calculate pane content width
+		treeWidth := 0
+		dividers := 1
+		if m.tree.Open {
+			treeWidth = TreeWidth(m.width)
+			dividers = 2
+		}
+		paneWidth := (m.width - treeWidth - dividers) / 2
+		m.paired = diff.BuildWrappedPairedLines(m.files[m.activeFile].Hunks, paneWidth)
+	} else {
+		m.paired = diff.BuildPairedLines(m.files[m.activeFile].Hunks)
+	}
+	if m.allPaired != nil && m.activeFile < len(m.allPaired) {
+		m.allPaired[m.activeFile] = m.paired
+	}
+	m.clampCursor()
+	m.scrollToCursor()
+}
+
 // View implements tea.Model.
 func (m Model) View() string {
+	// Check for narrow terminal
+	minWidth := m.config.Display.MinWidth
+	if minWidth <= 0 {
+		minWidth = 100
+	}
+	if m.width < minWidth {
+		msg := fmt.Sprintf("Terminal too narrow — resize to %d+ cols", minWidth)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, msg)
+	}
+
 	// Check for special file types that show centered messages instead of diff
 	if len(m.files) > 0 && m.activeFile < len(m.files) {
 		f := m.files[m.activeFile]
@@ -576,6 +623,14 @@ func (m Model) View() string {
 
 		if p.IsComment {
 			rows = append(rows, m.renderCommentRow(p, paneWidth, isCursor))
+			continue
+		}
+
+		if p.IsWrapContinuation {
+			leftStr := m.renderWrapContinuation(p.WrapSourceLeft, SideOld, paneWidth, lineNumWidth, p.WrapRow, isCursor, m.activeSide == SideOld)
+			rightStr := m.renderWrapContinuation(p.WrapSourceRight, SideNew, paneWidth, lineNumWidth, p.WrapRow, isCursor, m.activeSide == SideNew)
+			row := lipgloss.JoinHorizontal(lipgloss.Top, leftStr, "│", rightStr)
+			rows = append(rows, row)
 			continue
 		}
 
@@ -797,6 +852,74 @@ func (m Model) renderBlankPadding(paneWidth int, isCursor, isActiveSide bool) st
 		style = style.Background(lipgloss.Color(colorPaddingBg))
 	}
 	return style.Render(blank)
+}
+
+// renderWrapContinuation renders a continuation row for a wrapped line.
+// wrapRow is the 1-based visual row index within the wrapped line.
+// Uses ANSI-aware slicing to correctly handle syntax-highlighted content.
+func (m Model) renderWrapContinuation(source *diff.DiffLine, side Side, paneWidth, lineNumWidth, wrapRow int, isCursor, isActiveSide bool) string {
+	if source == nil {
+		return m.renderBlankPadding(paneWidth, isCursor, isActiveSide)
+	}
+
+	contentWidth := paneWidth - lineNumWidth
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+
+	content := source.Content
+	// Use ANSI-aware Cut to extract the correct visual slice
+	left := wrapRow * contentWidth
+	right := left + contentWidth
+	totalWidth := ansi.StringWidth(content)
+
+	if left >= totalWidth {
+		// This row is beyond the content — render as blank padding within the line
+		numStr := "    │"
+		padded := numStr + strings.Repeat(" ", contentWidth)
+		style := lipgloss.NewStyle()
+		if isCursor {
+			if isActiveSide {
+				style = style.Background(lipgloss.Color(colorCursorActive))
+			} else {
+				style = style.Background(lipgloss.Color(colorCursorInactive))
+			}
+		}
+		return style.Render(padded)
+	}
+
+	if right > totalWidth {
+		right = totalWidth
+	}
+	slice := ansi.Cut(content, left, right)
+
+	// Pad to fill content width
+	displayWidth := ansi.StringWidth(slice)
+	if displayWidth < contentWidth {
+		slice = slice + strings.Repeat(" ", contentWidth-displayWidth)
+	}
+
+	// Continuation rows have blank line number area
+	numStr := "    │"
+	lineStr := numStr + slice
+
+	style := lipgloss.NewStyle()
+	switch source.Type {
+	case diff.LineAdd:
+		style = style.Foreground(lipgloss.Color(colorAdd))
+	case diff.LineDelete:
+		style = style.Foreground(lipgloss.Color(colorDelete))
+	}
+
+	if isCursor {
+		if isActiveSide {
+			style = style.Background(lipgloss.Color(colorCursorActive))
+		} else {
+			style = style.Background(lipgloss.Color(colorCursorInactive))
+		}
+	}
+
+	return style.Render(lineStr)
 }
 
 // renderCommentRow renders a comment display row spanning both panes.

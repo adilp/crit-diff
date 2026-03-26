@@ -18,13 +18,17 @@ type CommentInfo struct {
 // PairedLine represents a single row in the side-by-side view.
 // Left and Right are zipped together with nil padding on the shorter side.
 type PairedLine struct {
-	Left        *DiffLine // nil = blank padding row
-	Right       *DiffLine // nil = blank padding row
-	IsSeparator bool      // true = hunk separator row (expandable context)
-	IsComment   bool      // true = comment display row
-	CommentID   string    // comment ID (non-empty for comment rows)
-	CommentBody string    // comment body text (non-empty for comment rows)
-	HunkIndex   int       // which hunk this line belongs to
+	Left               *DiffLine // nil = blank padding row
+	Right              *DiffLine // nil = blank padding row
+	IsSeparator        bool      // true = hunk separator row (expandable context)
+	IsComment          bool      // true = comment display row
+	CommentID          string    // comment ID (non-empty for comment rows)
+	CommentBody        string    // comment body text (non-empty for comment rows)
+	HunkIndex          int       // which hunk this line belongs to
+	IsWrapContinuation bool      // true = continuation row from line wrapping
+	WrapSourceLeft     *DiffLine // original left line this wraps (for rendering)
+	WrapSourceRight    *DiffLine // original right line this wraps (for rendering)
+	WrapRow            int       // which visual row within the wrapped line (1-based continuation)
 }
 
 // BuildPairedLines takes parsed hunks and produces a flat slice of PairedLine
