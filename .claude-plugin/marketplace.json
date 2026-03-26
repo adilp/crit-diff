@@ -1,0 +1,13 @@
+{
+  "name": "cr-marketplace",
+  "owner": {
+    "name": "Adil"
+  },
+  "plugins": [
+    {
+      "name": "cr",
+      "source": "./plugin/cr",
+      "description": "Side-by-side code review TUI with vim navigation. Leave inline comments in crit-compatible format, then let Claude address feedback automatically."
+    }
+  ]
+}

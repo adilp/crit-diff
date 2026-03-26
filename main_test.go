@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -230,6 +232,69 @@ func TestRunStatusNoComments(t *testing.T) {
 		if output == "" {
 			t.Error("expected non-empty output")
 		}
+	}
+}
+
+func TestParseArgs_SetupClaude(t *testing.T) {
+	got := parseArgs([]string{"setup-claude"})
+	if got.Subcmd != "setup-claude" {
+		t.Errorf("Subcmd: got %q, want %q", got.Subcmd, "setup-claude")
+	}
+}
+
+func TestRunSetupClaude(t *testing.T) {
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, ".claude", "skills", "cr-review", "SKILL.md")
+
+	if err := runSetupClaude(dir, false); err != nil {
+		t.Fatalf("runSetupClaude error: %v", err)
+	}
+
+	// Verify skill file was created
+	data, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("skill file not created: %v", err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "cr-review") {
+		t.Error("skill file should contain 'cr-review'")
+	}
+	if !strings.Contains(content, "cr status") {
+		t.Error("skill file should reference 'cr status'")
+	}
+}
+
+func TestRunSetupClaude_AlreadyExists(t *testing.T) {
+	dir := t.TempDir()
+
+	// Install once
+	if err := runSetupClaude(dir, false); err != nil {
+		t.Fatal(err)
+	}
+
+	// Install again without force — should error
+	err := runSetupClaude(dir, false)
+	if err == nil {
+		t.Error("expected error when skill already exists without --force")
+	}
+
+	// Install again with force — should succeed
+	if err := runSetupClaude(dir, true); err != nil {
+		t.Errorf("expected no error with --force, got: %v", err)
+	}
+}
+
+func TestRunSetupClaudeProject(t *testing.T) {
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, ".claude", "skills", "cr-review", "SKILL.md")
+
+	if err := runSetupClaudeProject(dir, false); err != nil {
+		t.Fatalf("runSetupClaudeProject error: %v", err)
+	}
+
+	if _, err := os.Stat(targetPath); err != nil {
+		t.Fatalf("skill file not created at project path: %v", err)
 	}
 }
 

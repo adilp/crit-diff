@@ -1,6 +1,7 @@
 package main
 
 import (
+	"embed"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,6 +16,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"gopkg.in/yaml.v3"
 )
+
+//go:embed skill/cr-review/SKILL.md
+var skillContent embed.FS
 
 type Mode string
 
@@ -78,15 +82,20 @@ func parseArgs(args []string) Args {
 			result.Wait = true
 		case "--staged", "--cached":
 			result.Mode = ModeStaged
+		case "--force", "--project":
+			// Handled directly in main() for setup-claude
 		default:
 			positional = append(positional, a)
 		}
 	}
 
 	// Check for subcommands
-	if len(positional) > 0 && positional[0] == "status" {
-		result.Subcmd = "status"
-		return result
+	if len(positional) > 0 {
+		switch positional[0] {
+		case "status", "setup-claude":
+			result.Subcmd = positional[0]
+			return result
+		}
 	}
 
 	// Parse ref arguments
@@ -147,6 +156,9 @@ Shortcuts:
 
 Commands:
   cr status                 Output all review comments as JSON (reads .crit/)
+  cr setup-claude           Install /cr-review skill for Claude Code
+  cr setup-claude --project Install skill for current project only
+  cr setup-claude --force   Overwrite existing skill
 
 Integration:
   cr --detach <ref>         Open in a tmux split pane
@@ -265,11 +277,86 @@ func runDetached(crArgs []string, wait bool) error {
 	return nil
 }
 
+// runSetupClaude installs the cr-review skill to ~/.claude/skills/ (or a custom home dir for testing).
+func runSetupClaude(homeDir string, force bool) error {
+	return installSkill(filepath.Join(homeDir, ".claude", "skills", "cr-review"), force)
+}
+
+// runSetupClaudeProject installs the cr-review skill to .claude/skills/ in the given directory.
+func runSetupClaudeProject(projectDir string, force bool) error {
+	return installSkill(filepath.Join(projectDir, ".claude", "skills", "cr-review"), force)
+}
+
+func installSkill(targetDir string, force bool) error {
+	targetPath := filepath.Join(targetDir, "SKILL.md")
+
+	if !force {
+		if _, err := os.Stat(targetPath); err == nil {
+			return fmt.Errorf("skill already exists at %s (use --force to overwrite)", targetPath)
+		}
+	}
+
+	content, err := skillContent.ReadFile("skill/cr-review/SKILL.md")
+	if err != nil {
+		return fmt.Errorf("reading embedded skill: %w", err)
+	}
+
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return fmt.Errorf("creating directory %s: %w", targetDir, err)
+	}
+
+	if err := os.WriteFile(targetPath, content, 0o644); err != nil {
+		return fmt.Errorf("writing skill file: %w", err)
+	}
+
+	return nil
+}
+
 func main() {
 	args := parseArgs(os.Args[1:])
 
 	if args.Help {
 		printUsage()
+		os.Exit(0)
+	}
+
+	// Handle setup-claude (doesn't need git repo)
+	if args.Subcmd == "setup-claude" {
+		force := false
+		project := false
+		for _, a := range os.Args[1:] {
+			if a == "--force" {
+				force = true
+			}
+			if a == "--project" {
+				project = true
+			}
+		}
+
+		if project {
+			cwd, err := os.Getwd()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			if err := runSetupClaudeProject(cwd, force); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("Installed /cr-review skill for this project\n")
+		} else {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			if err := runSetupClaude(home, force); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("Installed /cr-review skill globally\n")
+		}
+		fmt.Println("You can now use /cr-review <ref> in Claude Code.")
 		os.Exit(0)
 	}
 
