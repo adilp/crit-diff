@@ -46,6 +46,8 @@ const (
 	colorPaddingBg      = "233" // subtle background for blank padding rows
 	colorPaddingFg      = "239" // foreground for padding rows
 	colorSeparator      = "240" // foreground for hunk separator lines
+	colorAddBg          = "22"  // subtle green background for added lines
+	colorDeleteBg       = "52"  // subtle red background for deleted lines
 	colorEmphasisAdd    = "22"  // dark green background for word-level add emphasis
 	colorEmphasisDelete = "52"  // dark red background for word-level delete emphasis
 	colorBarBg          = "236" // dark gray background for status/help bars
@@ -806,7 +808,18 @@ func (m Model) renderPane(line *diff.DiffLine, side Side, paneWidth, lineNumWidt
 		}
 	}
 
-	contentWidth := paneWidth - lineNumWidth
+	// Gutter marker: +/- for changes, space for context
+	var gutter string
+	switch line.Type {
+	case diff.LineAdd:
+		gutter = "+"
+	case diff.LineDelete:
+		gutter = "-"
+	default:
+		gutter = " "
+	}
+
+	contentWidth := paneWidth - lineNumWidth - 1 // -1 for gutter marker
 	if contentWidth < 0 {
 		contentWidth = 0
 	}
@@ -830,7 +843,7 @@ func (m Model) renderPane(line *diff.DiffLine, side Side, paneWidth, lineNumWidt
 		content = content + strings.Repeat(" ", contentWidth-displayWidth)
 	}
 
-	lineStr := numStr + "│" + content
+	lineStr := numStr + "│" + gutter + content
 
 	// Apply styling — skip foreground color when using highlighted content
 	// (syntax colors are already embedded in the ANSI content)
@@ -844,11 +857,19 @@ func (m Model) renderPane(line *diff.DiffLine, side Side, paneWidth, lineNumWidt
 		}
 	}
 
+	// Background: cursor overrides line tint, otherwise changed lines get subtle color
 	if isCursor {
 		if isActiveSide {
 			style = style.Background(lipgloss.Color(colorCursorActive))
 		} else {
 			style = style.Background(lipgloss.Color(colorCursorInactive))
+		}
+	} else {
+		switch line.Type {
+		case diff.LineAdd:
+			style = style.Background(lipgloss.Color(colorAddBg))
+		case diff.LineDelete:
+			style = style.Background(lipgloss.Color(colorDeleteBg))
 		}
 	}
 
@@ -879,7 +900,7 @@ func (m Model) renderWrapContinuation(source *diff.DiffLine, side Side, paneWidt
 		return m.renderBlankPadding(paneWidth, isCursor, isActiveSide)
 	}
 
-	contentWidth := paneWidth - lineNumWidth
+	contentWidth := paneWidth - lineNumWidth - 1 // -1 for gutter
 	if contentWidth < 1 {
 		contentWidth = 1
 	}
@@ -892,7 +913,7 @@ func (m Model) renderWrapContinuation(source *diff.DiffLine, side Side, paneWidt
 
 	if left >= totalWidth {
 		// This row is beyond the content — render as blank padding within the line
-		numStr := "    │"
+		numStr := "    │ "
 		padded := numStr + strings.Repeat(" ", contentWidth)
 		style := lipgloss.NewStyle()
 		if isCursor {
@@ -916,8 +937,8 @@ func (m Model) renderWrapContinuation(source *diff.DiffLine, side Side, paneWidt
 		slice = slice + strings.Repeat(" ", contentWidth-displayWidth)
 	}
 
-	// Continuation rows have blank line number area
-	numStr := "    │"
+	// Continuation rows have blank line number area + space gutter
+	numStr := "    │ "
 	lineStr := numStr + slice
 
 	style := lipgloss.NewStyle()
@@ -933,6 +954,13 @@ func (m Model) renderWrapContinuation(source *diff.DiffLine, side Side, paneWidt
 			style = style.Background(lipgloss.Color(colorCursorActive))
 		} else {
 			style = style.Background(lipgloss.Color(colorCursorInactive))
+		}
+	} else {
+		switch source.Type {
+		case diff.LineAdd:
+			style = style.Background(lipgloss.Color(colorAddBg))
+		case diff.LineDelete:
+			style = style.Background(lipgloss.Color(colorDeleteBg))
 		}
 	}
 

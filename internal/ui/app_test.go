@@ -298,6 +298,50 @@ func TestViewRendering(t *testing.T) {
 	}
 }
 
+func TestGutterMarkers(t *testing.T) {
+	m := newTestModel(buildTestPairs(), 120, 40)
+	output := m.View()
+
+	// Added lines should have │+ gutter pattern (line number then │+ then content)
+	if !strings.Contains(output, "│+") {
+		t.Error("expected │+ gutter marker for added lines")
+	}
+
+	// Deleted lines should have │- gutter pattern
+	if !strings.Contains(output, "│-") {
+		t.Error("expected │- gutter marker for deleted lines")
+	}
+
+	// Context lines should have │ followed by space (no +/-)
+	if !strings.Contains(output, "│ ") {
+		t.Error("expected │ (space) gutter for context lines")
+	}
+}
+
+func TestChangedLineBackgroundDiffers(t *testing.T) {
+	// Verify that added, deleted, and context lines render differently
+	// (background tinting produces distinct output for each line type)
+	m := newTestModel(buildTestPairs(), 120, 40)
+
+	contextLine := &diff.DiffLine{Type: diff.LineContext, OldNum: 1, NewNum: 1, Content: "same content"}
+	addLine := &diff.DiffLine{Type: diff.LineAdd, NewNum: 2, Content: "same content"}
+	deleteLine := &diff.DiffLine{Type: diff.LineDelete, OldNum: 2, Content: "same content"}
+
+	contextOut := m.renderPane(contextLine, SideNew, 60, 5, false, false, "")
+	addOut := m.renderPane(addLine, SideNew, 60, 5, false, false, "")
+	deleteOut := m.renderPane(deleteLine, SideOld, 60, 5, false, false, "")
+
+	if contextOut == addOut {
+		t.Error("added line should render differently from context line (background tint)")
+	}
+	if contextOut == deleteOut {
+		t.Error("deleted line should render differently from context line (background tint)")
+	}
+	if addOut == deleteOut {
+		t.Error("added and deleted lines should render differently from each other")
+	}
+}
+
 func TestViewVisibleRows(t *testing.T) {
 	pairs := buildTallPairs()         // 30 lines
 	m := newTestModel(pairs, 120, 12) // height 12 → visibleRows = 10
