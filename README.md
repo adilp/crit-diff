@@ -1,4 +1,4 @@
-# cr
+# crit-diff
 
 A full-screen, side-by-side diff viewer with vim-native navigation. A companion to [crit](https://github.com/kevindutra/crit) — the excellent terminal review tool for markdown documents.
 
