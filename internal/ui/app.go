@@ -34,6 +34,7 @@ const (
 	InputModeVisual  InputMode = "visual"
 	InputModeSearch  InputMode = "search"
 	InputModeFuzzy   InputMode = "fuzzy"
+	InputModeHelp    InputMode = "help"
 )
 
 // Style constants for terminal colors.
@@ -89,6 +90,8 @@ type Model struct {
 	oldFileLines    []string                 // full old file content (0-indexed line strings)
 	newFileLines    []string                 // full new file content (0-indexed line strings)
 	wrapMode        bool                     // true = lines wrap within pane, false = clipped
+	helpYOffset     int                      // scroll offset for help overlay
+	helpEntries     []HelpEntry              // cached help entries (built on mode entry)
 }
 
 // NewModel creates a new TUI model with the given diff data and terminal dimensions.
@@ -180,6 +183,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyCtrlC {
 		return m, tea.Quit
+	}
+
+	// Help mode has its own key handling
+	if m.mode == InputModeHelp {
+		return m.handleHelpKey(msg)
 	}
 
 	// Fuzzy mode has its own key handling
@@ -337,6 +345,9 @@ func (m Model) handleAction(action keys.Action) (tea.Model, tea.Cmd) {
 	case keys.ActionSearch:
 		m.openSearch()
 	case keys.ActionHelp:
+		m.mode = InputModeHelp
+		m.helpYOffset = 0
+		m.helpEntries = BuildHelpEntries(m.config)
 	case keys.ActionToggleWrap:
 		m.toggleWrap()
 	case keys.ActionDiscard, keys.ActionNone:
@@ -715,6 +726,12 @@ func (m Model) View() string {
 		result = RenderFuzzyOverlay(&m.fuzzy, m.width, m.height)
 	}
 
+	// Render help overlay when active
+	if m.mode == InputModeHelp {
+		helpBox := RenderHelpOverlay(m.helpEntries, m.width, m.height, m.helpYOffset)
+		result = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, helpBox)
+	}
+
 	return result
 }
 
@@ -1064,6 +1081,33 @@ func (m *Model) openFuzzyContent() {
 
 // handleFuzzyKey handles key input when in fuzzy overlay mode.
 // Navigation uses arrow keys and Ctrl-j/Ctrl-k only; all other keys go to the text input.
+// handleHelpKey handles key input when the help overlay is open.
+// Only Esc, ?, and j/k (scroll) are active; all other keys are ignored.
+func (m Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.mode = InputModeNormal
+		return m, nil
+	case tea.KeyRunes:
+		switch string(msg.Runes) {
+		case "?":
+			m.mode = InputModeNormal
+			return m, nil
+		case "j":
+			m.helpYOffset++
+			// Upper bound is clamped inside RenderHelpOverlay
+			return m, nil
+		case "k":
+			if m.helpYOffset > 0 {
+				m.helpYOffset--
+			}
+			return m, nil
+		}
+	}
+	// All other keys are ignored in help mode
+	return m, nil
+}
+
 func (m Model) handleFuzzyKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc:

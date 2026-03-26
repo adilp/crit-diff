@@ -55,6 +55,11 @@ func RenderHelpBar(width int, mode InputMode) string {
 			{"Enter", "select"},
 			{"Esc", "cancel"},
 		}
+	case InputModeHelp:
+		hints = []hint{
+			{"Esc/?", "close"},
+			{"j/k", "scroll"},
+		}
 	default:
 		hints = []hint{
 			{"Esc", "back"},
