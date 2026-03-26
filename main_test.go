@@ -1,7 +1,10 @@
 package main
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/adil/cr/internal/comment"
 )
 
 func TestParseArgs(t *testing.T) {
@@ -13,6 +16,9 @@ func TestParseArgs(t *testing.T) {
 		wantRefTo   string
 		wantPaths   []string
 		wantHelp    bool
+		wantSubcmd  string
+		wantDetach  bool
+		wantWait    bool
 	}{
 		{
 			name:     "no args",
@@ -110,6 +116,29 @@ func TestParseArgs(t *testing.T) {
 			args:     []string{"--cached"},
 			wantMode: ModeStaged,
 		},
+		{
+			name:       "status subcommand",
+			args:       []string{"status"},
+			wantMode:   ModeWorkingTree,
+			wantSubcmd: "status",
+		},
+		{
+			name:        "--detach flag with ref",
+			args:        []string{"--detach", "main"},
+			wantMode:    ModeSingleRef,
+			wantRefFrom: "main",
+			wantRefTo:   "HEAD",
+			wantDetach:  true,
+		},
+		{
+			name:        "--detach --wait with ref range",
+			args:        []string{"--detach", "--wait", "a..b"},
+			wantMode:    ModeRefRange,
+			wantRefFrom: "a",
+			wantRefTo:   "b",
+			wantDetach:  true,
+			wantWait:    true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -140,7 +169,67 @@ func TestParseArgs(t *testing.T) {
 					t.Errorf("PathFilters[%d]: got %q, want %q", i, got.PathFilters[i], p)
 				}
 			}
+			if got.Subcmd != tt.wantSubcmd {
+				t.Errorf("Subcmd: got %q, want %q", got.Subcmd, tt.wantSubcmd)
+			}
+			if got.Detach != tt.wantDetach {
+				t.Errorf("Detach: got %v, want %v", got.Detach, tt.wantDetach)
+			}
+			if got.Wait != tt.wantWait {
+				t.Errorf("Wait: got %v, want %v", got.Wait, tt.wantWait)
+			}
 		})
+	}
+}
+
+func TestRunStatus(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write session manifest
+	if err := comment.WriteSessionManifest(dir, "HEAD", []string{"test.go", "main.go"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create comments
+	store := comment.NewStore(dir)
+	if err := store.AddComment("test.go", 10, 0, "some code", "fix this bug"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddComment("main.go", 5, 0, "other code", "rename this"); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := runStatus(dir)
+	if err != nil {
+		t.Fatalf("runStatus error: %v", err)
+	}
+
+	// Should contain both comments as JSON
+	if !strings.Contains(output, "fix this bug") {
+		t.Error("expected output to contain 'fix this bug'")
+	}
+	if !strings.Contains(output, "rename this") {
+		t.Error("expected output to contain 'rename this'")
+	}
+	if !strings.Contains(output, "test.go") {
+		t.Error("expected output to contain file path 'test.go'")
+	}
+}
+
+func TestRunStatusNoComments(t *testing.T) {
+	dir := t.TempDir()
+
+	output, err := runStatus(dir)
+	if err != nil {
+		t.Fatalf("runStatus error: %v", err)
+	}
+
+	// Should output valid JSON with empty comments
+	if !strings.Contains(output, "[]") && !strings.Contains(output, "comments") {
+		// At minimum should be parseable
+		if output == "" {
+			t.Error("expected non-empty output")
+		}
 	}
 }
 

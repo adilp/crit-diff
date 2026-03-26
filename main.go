@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/adil/cr/internal/diff"
 	"github.com/adil/cr/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
+	"gopkg.in/yaml.v3"
 )
 
 type Mode string
@@ -28,6 +31,9 @@ type Args struct {
 	RefTo       string
 	PathFilters []string
 	Help        bool
+	Subcmd      string // "status" subcommand
+	Detach      bool   // --detach: open in tmux split pane
+	Wait        bool   // --wait: block until detached review completes
 }
 
 // numRe matches numeric shortcuts like -1, -3, -10.
@@ -59,26 +65,40 @@ func parseArgs(args []string) Args {
 		refArgs = args
 	}
 
+	// Extract flags and positional args
+	var positional []string
+	for _, a := range refArgs {
+		switch a {
+		case "--help", "-h":
+			result.Help = true
+			return result
+		case "--detach":
+			result.Detach = true
+		case "--wait":
+			result.Wait = true
+		case "--staged", "--cached":
+			result.Mode = ModeStaged
+		default:
+			positional = append(positional, a)
+		}
+	}
+
+	// Check for subcommands
+	if len(positional) > 0 && positional[0] == "status" {
+		result.Subcmd = "status"
+		return result
+	}
+
 	// Parse ref arguments
-	if len(refArgs) == 0 {
+	if len(positional) == 0 {
 		return result
 	}
 
-	if len(refArgs) > 1 {
-		fmt.Fprintf(os.Stderr, "warning: unexpected arguments ignored: %s\n", strings.Join(refArgs[1:], " "))
+	if len(positional) > 1 {
+		fmt.Fprintf(os.Stderr, "warning: unexpected arguments ignored: %s\n", strings.Join(positional[1:], " "))
 	}
 
-	ref := refArgs[0]
-
-	if ref == "--help" || ref == "-h" {
-		result.Help = true
-		return result
-	}
-
-	if ref == "--staged" || ref == "--cached" {
-		result.Mode = ModeStaged
-		return result
-	}
+	ref := positional[0]
 
 	// Numeric shortcut: -N → HEAD~N..HEAD
 	if numRe.MatchString(ref) {
@@ -125,9 +145,124 @@ Shortcuts:
   cr -3                     Last 3 commits
   cr --staged               Only staged changes (same as --cached)
 
+Commands:
+  cr status                 Output all review comments as JSON (reads .crit/)
+
+Integration:
+  cr --detach <ref>         Open in a tmux split pane
+  cr --detach --wait <ref>  Open in tmux and block until review completes
+
 Options:
   -h, --help                Show this help message
 `)
+}
+
+// statusComment is the JSON output format for cr status.
+type statusComment struct {
+	File           string `json:"file"`
+	ID             string `json:"id"`
+	Line           int    `json:"line"`
+	EndLine        int    `json:"end_line,omitempty"`
+	ContentSnippet string `json:"content_snippet"`
+	Body           string `json:"body"`
+}
+
+// runStatus reads all .crit/ comments and outputs them as JSON.
+func runStatus(repoRoot string) (string, error) {
+	manifest, err := os.ReadFile(filepath.Join(repoRoot, ".crit", "code-review.yaml"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "[]", nil
+		}
+		return "", fmt.Errorf("read session manifest: %w", err)
+	}
+
+	// Parse manifest to get file list
+	var session comment.CodeReviewSession
+	if err := yaml.Unmarshal(manifest, &session); err != nil {
+		return "", fmt.Errorf("parse session manifest: %w", err)
+	}
+
+	store := comment.NewStore(repoRoot)
+	if err := store.LoadAll(session.Files); err != nil {
+		return "", fmt.Errorf("load comments: %w", err)
+	}
+
+	var result []statusComment
+	for _, file := range session.Files {
+		for _, c := range store.Comments(file) {
+			result = append(result, statusComment{
+				File:           file,
+				ID:             c.ID,
+				Line:           c.Line,
+				EndLine:        c.EndLine,
+				ContentSnippet: c.ContentSnippet,
+				Body:           c.Body,
+			})
+		}
+	}
+
+	if result == nil {
+		result = []statusComment{}
+	}
+
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal comments: %w", err)
+	}
+	return string(data), nil
+}
+
+// shellEscape escapes a string for safe embedding in a POSIX shell command.
+func shellEscape(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+// runDetached opens cr in a tmux split pane. If wait is true, blocks until the pane closes.
+func runDetached(crArgs []string, wait bool) error {
+	if os.Getenv("TMUX") == "" {
+		return fmt.Errorf("--detach requires a tmux session (TMUX not set)")
+	}
+
+	tmuxBin, err := exec.LookPath("tmux")
+	if err != nil {
+		return fmt.Errorf("tmux not found: %w", err)
+	}
+
+	crBin, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve cr binary: %w", err)
+	}
+	crBin, err = filepath.EvalSymlinks(crBin)
+	if err != nil {
+		return fmt.Errorf("resolve cr symlink: %w", err)
+	}
+
+	channel := fmt.Sprintf("cr-review-%d", os.Getpid())
+
+	// Build the command to run in the tmux pane
+	var argStr string
+	for _, a := range crArgs {
+		argStr += " " + shellEscape(a)
+	}
+	paneCmd := fmt.Sprintf("%s%s ; tmux wait-for -S %s", shellEscape(crBin), argStr, channel)
+
+	splitCmd := exec.Command(tmuxBin, "split-window", "-h", "-p", "70", paneCmd)
+	if err := splitCmd.Run(); err != nil {
+		return fmt.Errorf("failed to open tmux pane: %w", err)
+	}
+
+	fmt.Fprintln(os.Stderr, "Opened cr in tmux pane")
+
+	if wait {
+		waitCmd := exec.Command(tmuxBin, "wait-for", channel)
+		if err := waitCmd.Run(); err != nil {
+			return fmt.Errorf("review pane terminated abnormally")
+		}
+		fmt.Fprintln(os.Stderr, "Review complete.")
+	}
+
+	return nil
 }
 
 func main() {
@@ -148,6 +283,38 @@ func main() {
 	if err := checkGitRepo(cwd); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Handle status subcommand
+	if args.Subcmd == "status" {
+		repoRoot, err := diff.GetRepoRoot(cwd)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		output, err := runStatus(repoRoot)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(output)
+		os.Exit(0)
+	}
+
+	// Handle --detach mode (open in tmux split pane)
+	if args.Detach {
+		// Rebuild args without --detach and --wait for the child process
+		var childArgs []string
+		for _, a := range os.Args[1:] {
+			if a != "--detach" && a != "--wait" {
+				childArgs = append(childArgs, a)
+			}
+		}
+		if err := runDetached(childArgs, args.Wait); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
 	}
 
 	// Build diff args from parsed CLI args
