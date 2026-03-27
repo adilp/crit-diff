@@ -13,7 +13,7 @@ We recommend installing both for the full workflow — crit for reviewing what C
 cr is available as a Claude Code plugin. Add the marketplace and install:
 
 ```
-/plugin marketplace add adil/cr
+/plugin marketplace add adilp/crit-diff
 /plugin install cr
 ```
 
