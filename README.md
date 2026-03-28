@@ -6,6 +6,8 @@ Where crit handles document review (plans, specs, markdown), cr handles **git di
 
 We recommend installing both for the full workflow — crit for reviewing what Claude writes, cr for reviewing what Claude changes.
 
+![cr demo](assets/cr-demo.gif)
+
 ## Install
 
 ### Claude Code Plugin Marketplace (recommended)
